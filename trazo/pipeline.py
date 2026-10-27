@@ -23,7 +23,7 @@ class Layout:
     rotate: float = 0.0
     mirror_x: bool = False
     mirror_y: bool = False
-    align: str = "center"      # center | bl | br | tl | tr | origin
+    align: str = "center"      # center | tl tc tr cl cr bl bc br | origin
     offset_x: float = 0.0
     offset_y: float = 0.0
 
@@ -116,10 +116,10 @@ def layout_matrix(doc: g.Document, L: Layout, area) -> tuple[np.ndarray, float]:
     if L.align == "origin" and not (L.mirror_x or L.mirror_y or L.rotate):
         # el (0,0) del documento cae en la esquina inferior izquierda del área
         return g.translate(area[0] + pad * s + L.offset_x, area[1] + pad * s + L.offset_y) @ g.scale(s), s
-    ax = {"bl": area[0] - minx, "tl": area[0] - minx, "br": area[2] - maxx, "tr": area[2] - maxx}
-    ay = {"bl": area[1] - miny, "br": area[1] - miny, "tl": area[3] - maxy, "tr": area[3] - maxy}
-    tx = ax.get(L.align, (area[0] + area[2]) / 2 - (minx + maxx) / 2)
-    ty = ay.get(L.align, (area[1] + area[3]) / 2 - (miny + maxy) / 2)
+    # código de 2 letras: vertical (t/c/b) + horizontal (l/c/r); "center" = cc
+    code = "cc" if L.align in ("center", "origin") or len(L.align) != 2 else L.align
+    tx = {"l": area[0] - minx, "r": area[2] - maxx}.get(code[1], (area[0] + area[2]) / 2 - (minx + maxx) / 2)
+    ty = {"b": area[1] - miny, "t": area[3] - maxy}.get(code[0], (area[1] + area[3]) / 2 - (miny + maxy) / 2)
     return g.translate(tx + L.offset_x, ty + L.offset_y) @ m, s
 
 

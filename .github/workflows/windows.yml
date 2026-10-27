@@ -26,6 +26,7 @@ jobs:
       - name: Compilar ejecutable
         run: >
           pyinstaller --noconfirm --clean --name Trazo --console
+          --icon docs\marca\trazo.ico
           --add-data "trazo\web;trazo\web"
           --collect-all skimage --collect-all HersheyFonts --collect-data ezdxf
           --collect-submodules uvicorn trazo\__main__.py

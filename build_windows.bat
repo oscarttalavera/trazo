@@ -6,7 +6,7 @@ if not exist .venv (
 )
 .venv\Scripts\python -m pip install --upgrade pip
 .venv\Scripts\python -m pip install -e .[dev]
-.venv\Scripts\pyinstaller --noconfirm --clean --name Trazo --console ^
+.venv\Scripts\pyinstaller --noconfirm --clean --name Trazo --console --icon docs\marca\trazo.ico ^
   --add-data "trazo\web;trazo\web" ^
   --collect-all skimage --collect-all HersheyFonts --collect-data ezdxf ^
   --collect-submodules uvicorn ^

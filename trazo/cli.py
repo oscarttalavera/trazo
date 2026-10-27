@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--rotate", type=float)
     g.add_argument("--mirror-x", action="store_true")
     g.add_argument("--mirror-y", action="store_true")
-    g.add_argument("--align", choices=["center", "bl", "br", "tl", "tr", "origin"])
+    g.add_argument("--align", choices=["center", "tl", "tc", "tr", "cl", "cr", "bl", "bc", "br", "origin"])
     g.add_argument("--offset", type=float, nargs=2, metavar=("X", "Y"))
     g.add_argument("--pattern", choices=["lines", "zigzag", "cross", "concentric", "none"])
     g.add_argument("--angle", type=float)

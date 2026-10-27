@@ -33,7 +33,7 @@ trazo = "trazo.cli:main"
 include = ["trazo*"]
 
 [tool.setuptools.package-data]
-trazo = ["web/*"]
+trazo = ["web/*", "web/fonts/*", "web/assets/*"]
 
 [tool.ruff]
 line-length = 120

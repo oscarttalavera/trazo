@@ -1,4 +1,6 @@
-# Trazo — G-code para plotter de pluma en impresoras 3D
+<p><img src="docs/marca/trazo-logo.png" alt="Trazo" height="64"></p>
+
+**Generador de G-code para plotter de pluma en impresoras 3D** · una herramienta de **Tritic**
 
 Convierte **SVG, DXF, PNG y JPG** en G-code para dibujar con plumas, marcadores o
 bolígrafos montados junto al hotend de una impresora 3D cartesiana (Ender 3 V1,
@@ -11,6 +13,9 @@ El **ancho de línea** se ajusta al diámetro de la punta:
 - **Separación de pasadas:** es `punta × (1 − traslape)`.
 - **Trazos más gruesos que la punta:** se dibujan con varias pasadas paralelas.
 - **Detalles más finos que la punta:** se dibujan por su eje central, con aviso.
+- **Escala de grises con una sola pluma:** cada color o capa puede llevar una densidad de tinta.
+
+![Interfaz de Trazo](docs/captura_interfaz.png)
 
 ---
 
@@ -39,8 +44,6 @@ python -m venv .venv
 ```
 Los scripts `Trazo.bat` y `build_windows.bat` sirven solo en PCs **con Python
 instalado**.
-
-![Interfaz de Trazo](docs/captura_interfaz.png)
 
 ---
 
@@ -209,7 +212,36 @@ La variable `TRAZO_HOME` cambia esa carpeta.
 
 ---
 
-## 9. Desarrollo
+## 9. Interfaz y marca
+La interfaz sigue el sistema visual **Tritic** («plano de taller»):
+- **Tipografía:** IBM Plex Sans y Plex Mono (los datos y unidades van en
+  mono), y Syncopate solo en el nombre TRAZO.
+- **Trazado:** filetes finos en lugar de sombras y esquinas de 0–2 px.
+- **Color:** un solo acento verde Tritic por vista, el botón *Generar G-code*.
+- **Organización:** el flujo de trabajo va numerado con *chips* (01 Archivo →
+  06 Salida) y el resumen del trabajo tiene forma de *cajetín* técnico.
+- **Tema:** sigue el modo claro u oscuro del sistema.
+
+Todas las tipografías van incluidas en el programa (licencia SIL OFL 1.1),
+así que funciona sin conexión.
+
+**Logotipo** en `docs/marca/`:
+
+| Archivo | Uso |
+|---|---|
+| `trazo-logo.svg` / `.png` | Símbolo + nombre, sobre fondo claro |
+| `trazo-logo-blanco.svg` | Sobre azul Tritic o azul noche |
+| `trazo-simbolo.svg` | Icono de la app; `trazo-simbolo-simple.svg` para 16 px |
+| `trazo.ico` | Icono de `Trazo.exe` (16, 32, 48 y 256 px) |
+
+El símbolo es un *chip* azul Tritic con retícula de puntos. La T va en verde
+Tritic: la barra es un trazo sólido y el tallo, un **relleno en zigzag** de
+una sola línea, la operación que hace el programa. `tools/logo.py` regenera
+los archivos.
+
+![Modo oscuro](docs/captura_oscuro.png)
+
+## 10. Desarrollo
 ```bash
 pip install -e .[dev]
 python tests/make_data.py   # genera los archivos de prueba
