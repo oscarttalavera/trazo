@@ -3,9 +3,10 @@ __pycache__/
 *.pyc
 build/
 dist/
-*.spec
 *.gcode
 !tests/data/*
 .pytest_cache/
 .ruff_cache/
 *.zip
+.cache/
+site/

@@ -1,0 +1,77 @@
+name: web
+# Arma el sitio estático de Trazo (todo corre en el navegador con Pyodide).
+#  - cualquier push / PR / manual: pruebas (CPython y dentro de Pyodide) + artefacto trazo-web.zip
+#  - etiqueta v*: además publica un Release con trazo-web-<versión>.zip
+#  - si la variable de repositorio DEPLOY_PAGES = "true": publica en GitHub Pages desde main
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYODIDE_VERSION: "0.29.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Instalar dependencias
+        run: python -m pip install -e .[dev]
+      - name: Pruebas (CPython)
+        run: python -m pytest -q tests
+      - name: Caché de Pyodide
+        uses: actions/cache@v4
+        with:
+          path: .cache/pyodide-${{ env.PYODIDE_VERSION }}
+          key: pyodide-${{ env.PYODIDE_VERSION }}
+      - name: Armar el sitio
+        run: python tools/build_web.py --out site
+      - name: Pruebas dentro de Pyodide (motor del navegador)
+        run: node tools/test_pyodide.mjs .cache/pyodide-${{ env.PYODIDE_VERSION }}/pyodide site
+      - name: Empaquetar
+        run: cd site && zip -qr ../trazo-web.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trazo-web
+          path: trazo-web.zip
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && vars.DEPLOY_PAGES == 'true'
+        with:
+          path: site
+      - name: Publicar Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp trazo-web.zip "trazo-web-${GITHUB_REF_NAME}.zip"
+          gh release create "$GITHUB_REF_NAME" "trazo-web-${GITHUB_REF_NAME}.zip" --title "Trazo $GITHUB_REF_NAME" \
+            --notes "Sitio web estático de Trazo. Descomprima el zip y súbalo tal cual a cualquier hosting (p. ej. tools.tritic3d.com/trazo/)."
+
+  deploy-pages:
+    needs: build
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_PAGES == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

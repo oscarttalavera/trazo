@@ -137,10 +137,17 @@ def from_dict(cls, d: dict):
 class ProfileStore:
     """Perfiles integrados + perfiles del usuario (los del usuario ganan)."""
 
-    def __init__(self, path: Path | None = None):
-        self.path = path or profiles_path()
+    def __init__(self, path: Path | None = None, data: dict | None = None):
+        """Con `data` ({tipo: [perfiles]}) trabaja en memoria, sin archivo (versión web)."""
+        self.memory = data is not None
+        self.path = None if self.memory else (path or profiles_path())
         self.user: dict[str, dict[str, dict]] = {k: {} for k in KINDS}
-        if self.path.exists():
+        if self.memory:
+            for k in KINDS:
+                for d in data.get(k, []) or []:
+                    if isinstance(d, dict) and d.get("name"):
+                        self.user[k][d["name"]] = asdict(from_dict(KINDS[k], d))
+        elif self.path.exists():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
                 for k in KINDS:
@@ -177,7 +184,12 @@ class ProfileStore:
         self.user[kind].pop(name, None)
         self._write()
 
+    def export(self) -> dict:
+        return {k: list(v.values()) for k, v in self.user.items()}
+
     def _write(self):
+        if self.memory:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {k: list(v.values()) for k, v in self.user.items()}
         self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

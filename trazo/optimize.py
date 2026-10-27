@@ -5,10 +5,66 @@ En impresoras con Z por husillo (Ender 3: ~5 mm/s) cada levantada cuesta
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
-from scipy.spatial import cKDTree
 
 from .geometry import dedupe, simplify
+
+
+class _Grid:
+    """Rejilla espacial para buscar el punto vivo más cercano (sustituye a un KD-tree)."""
+
+    def __init__(self, pts: np.ndarray, idx: np.ndarray):
+        self.pts = pts
+        sub = pts[idx]
+        lo, hi = sub.min(axis=0), sub.max(axis=0)
+        w, h = (float(v) for v in hi - lo)
+        m = max(len(idx), 1)
+        # ~3 puntos por celda; acotado para que la rejilla no tenga más de ~4·√m celdas por lado
+        # (evita celdas diminutas cuando los puntos están casi alineados)
+        self.cell = max(math.sqrt(w * h * 3.0 / m), max(w, h) / (4.0 * math.sqrt(m) + 1.0), 1e-3)
+        keys = np.floor(sub / self.cell).astype(np.int64)
+        self.lo, self.hi = keys.min(axis=0), keys.max(axis=0)
+        self.buckets: dict[tuple[int, int], list[int]] = {}
+        for k, (i, j) in zip(idx.tolist(), keys.tolist()):
+            self.buckets.setdefault((i, j), []).append(k)
+
+    def _ring(self, cx: int, cy: int, r: int):
+        if r == 0:
+            yield cx, cy
+            return
+        for i in range(cx - r, cx + r + 1):
+            yield i, cy - r
+            yield i, cy + r
+        for j in range(cy - r + 1, cy + r):
+            yield cx - r, j
+            yield cx + r, j
+
+    def nearest(self, pos: np.ndarray, alive) -> tuple[float, int] | None:
+        cx, cy = (int(v) for v in np.floor(pos / self.cell))
+        rmax = int(max(abs(cx - self.lo[0]), abs(cx - self.hi[0]), abs(cy - self.lo[1]), abs(cy - self.hi[1]))) + 1
+        best, bestd = None, math.inf
+        for r in range(rmax + 1):
+            for key in self._ring(cx, cy, r):
+                b = self.buckets.get(key)
+                if not b:
+                    continue
+                live = [k for k in b if alive(k)]
+                if len(live) != len(b):
+                    if live:
+                        self.buckets[key] = live
+                    else:
+                        del self.buckets[key]
+                        continue
+                d = np.hypot(*(self.pts[live] - pos).T)
+                m = int(np.argmin(d))
+                if d[m] < bestd:
+                    best, bestd = live[m], float(d[m])
+            # cualquier punto en el anillo r+1 está a más de r·celda
+            if best is not None and bestd <= r * self.cell:
+                break
+        return None if best is None else (bestd, best)
 
 
 def _is_closed(p: np.ndarray) -> bool:
@@ -31,7 +87,7 @@ def prepare(paths: list[np.ndarray], simplify_tol: float = 0.02, min_len: float 
 
 def order(paths: list[np.ndarray], start=(0.0, 0.0), merge_tol: float = 0.1,
           reverse: bool = True) -> list[np.ndarray]:
-    """Vecino más cercano con KD-tree; los lazos cerrados pueden empezar en
+    """Vecino más cercano (rejilla espacial); los lazos cerrados pueden empezar en
     cualquier vértice y los abiertos invertirse. Une trazos a < merge_tol."""
     n = len(paths)
     if n == 0:
@@ -53,27 +109,16 @@ def order(paths: list[np.ndarray], start=(0.0, 0.0), merge_tol: float = 0.1,
     vert = np.asarray(vert)
     used = np.zeros(n, bool)
 
-    idx_map = np.arange(len(allpts))
-    tree = cKDTree(allpts)
+    def alive(k: int) -> bool:
+        return not used[owner[k]]
+
+    grid = _Grid(allpts, np.arange(len(allpts)))
     alive_at_build = n
     result: list[np.ndarray] = []
     pos = np.asarray(start, float)
     done = 0
     while done < n:
-        k = 8
-        hit = None
-        while hit is None:
-            kk = min(k, len(idx_map))
-            d, ii = tree.query(pos, k=kk)
-            d, ii = np.atleast_1d(d), np.atleast_1d(ii)
-            for dist, j in zip(d, ii):
-                if j < len(idx_map) and not used[owner[idx_map[j]]]:
-                    hit = (dist, idx_map[j])
-                    break
-            if hit is None:
-                if kk >= len(idx_map):
-                    break
-                k *= 4
+        hit = grid.nearest(pos, alive)
         if hit is None:
             break
         dist, gi = hit
@@ -92,12 +137,10 @@ def order(paths: list[np.ndarray], start=(0.0, 0.0), merge_tol: float = 0.1,
         else:
             result.append(p)
         pos = p[-1]
-        # reconstruir el árbol cuando la mitad de los trazos ya se usó
+        # reconstruir la rejilla cuando quedan pocos trazos (celdas más grandes)
         remaining = n - done
-        if remaining and remaining < alive_at_build / 2:
-            keep = ~used[owner]
-            idx_map = np.nonzero(keep)[0]
-            tree = cKDTree(allpts[idx_map])
+        if remaining and remaining < alive_at_build / 4:
+            grid = _Grid(allpts, np.nonzero(~used[owner])[0])
             alive_at_build = remaining
     return result
 

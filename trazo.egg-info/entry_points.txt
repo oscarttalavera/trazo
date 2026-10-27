@@ -1,0 +1,2 @@
+[console_scripts]
+trazo = trazo.cli:main

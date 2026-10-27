@@ -4,7 +4,8 @@
   trazo logo.png --raster-mode trace --image-width 80 --pattern zigzag
   trazo calibrate --pen "Sharpie fino"
   trazo profiles
-  trazo serve            (interfaz web local)
+
+La interfaz web vive en web/ (se ejecuta en el navegador con Pyodide).
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from pathlib import Path
 from . import __version__, calibration, gcode, job, pipeline, preview
 from .profiles import ProfileStore
 
-COMMANDS = {"gcode", "serve", "calibrate", "profiles"}
+COMMANDS = {"gcode", "calibrate", "profiles"}
 
 
 def _common(p: argparse.ArgumentParser):
@@ -71,11 +72,6 @@ def build_parser() -> argparse.ArgumentParser:
     _common(c)
 
     sub.add_parser("profiles", help="listar perfiles")
-
-    s = sub.add_parser("serve", help="interfaz web local")
-    s.add_argument("--port", type=int, default=8765)
-    s.add_argument("--host", default="127.0.0.1")
-    s.add_argument("--no-browser", action="store_true")
     return ap
 
 
@@ -220,14 +216,10 @@ def cmd_profiles(_a) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        argv = ["serve"]
+        argv = ["--help"]
     elif argv[0] not in COMMANDS and not argv[0].startswith("-"):
         argv.insert(0, "gcode")
     a = build_parser().parse_args(argv)
-    if a.cmd == "serve":
-        from .server import serve
-        serve(a.host, a.port, open_browser=not a.no_browser)
-        return 0
     return {"gcode": cmd_gcode, "calibrate": cmd_calibrate, "profiles": cmd_profiles}[a.cmd](a)
 
 

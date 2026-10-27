@@ -4,14 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trazo · Tritic</title>
-<link rel="icon" type="image/svg+xml" href="/static/assets/trazo-simbolo.svg">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" type="image/svg+xml" href="assets/trazo-simbolo.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#04202F">
+<meta name="description" content="Trazo convierte SVG, DXF, PNG y JPG en G-code para dibujar con plumas en impresoras 3D. Una herramienta de Tritic.">
+<link rel="apple-touch-icon" href="assets/trazo-simbolo-256.png">
+<link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="booting">
 <header class="top">
   <div class="brand" title="Trazo — G-code para plotter de pluma">
-    <img src="/static/assets/trazo-simbolo.svg" alt="" width="28" height="28">
-    <img src="/static/assets/trazo-nombre-blanco.svg" alt="Trazo" height="12" class="wordmark">
+    <img src="assets/trazo-simbolo.svg" alt="" width="28" height="28">
+    <img src="assets/trazo-nombre-blanco.svg" alt="Trazo" height="12" class="wordmark">
   </div>
   <span class="tsep"></span>
   <button class="tbtn" id="btnOpen" title="Abrir archivo (Ctrl+O)"><i data-icon="folder"></i><span>Abrir</span></button>
@@ -158,7 +162,7 @@
       <header class="sec-h"><span class="chip">06</span><h2>Optimización y salida</h2><span class="sum" data-sum="salida"></span><i data-icon="chevron" class="chev"></i></header>
       <div class="sec-b">
         <div class="f"><label>Archivos</label>
-          <div class="seg" data-seg="per_pen"><button data-v="false" title="Un archivo con pausas para cambiar pluma">Uno con pausas</button><button data-v="true" title="Un archivo por pluma (.zip)">Uno por pluma</button></div></div>
+          <div class="seg" data-seg="per_pen"><button data-v="false" title="Un solo archivo con pausas para cambiar de pluma">Único</button><button data-v="true" title="Un archivo por pluma, en un .zip">Por pluma (.zip)</button></div></div>
         <div class="f"><span></span><label class="ck"><input type="checkbox" data-k="reorder">Reordenar trazos (menos viajes)</label></div>
         <div class="f"><span></span><label class="ck"><input type="checkbox" data-k="clip">Recortar al área de dibujo</label></div>
         <div class="f"><label>Unir huecos menores a</label><div class="num"><input type="number" min="0" step="0.05" data-k="merge_tol" placeholder="½ punta"><span class="u">mm</span></div></div>
@@ -200,6 +204,12 @@
         <p>Arrástrelo a esta área o use <b>Abrir</b>.</p>
         <p class="mono fmt">SVG · DXF · PNG · JPG</p>
         <button class="btn primary" data-action="open"><i data-icon="folder"></i>Abrir archivo…</button>
+        <div class="engine" id="engine">
+          <div class="engine-bar"><i id="engineBar"></i></div>
+          <p class="mono" id="engineText">Preparando el motor de cálculo…</p>
+          <p class="help">Todo se calcula en su navegador: sus archivos no se suben a ningún servidor.
+            La primera carga descarga ~20 MB; después queda en caché y funciona sin conexión.</p>
+        </div>
         <table class="keys">
           <tr><td>Ctrl+O</td><td>Abrir</td><td>F</td><td>Ajustar vista</td></tr>
           <tr><td>Ctrl+G</td><td>Generar G-code</td><td>Espacio</td><td>Simular recorrido</td></tr>
@@ -226,8 +236,8 @@
     </div>
     <div class="sign">
       <span>una herramienta de</span>
-      <picture><source srcset="/static/assets/tritic-logo-verde.svg" media="(prefers-color-scheme: dark)">
-        <img src="/static/assets/tritic-logo-azul.svg" alt="Tritic" width="84"></picture>
+      <picture><source srcset="assets/tritic-logo-verde.svg" media="(prefers-color-scheme: dark)">
+        <img src="assets/tritic-logo-azul.svg" alt="Tritic" width="84"></picture>
     </div>
   </aside>
 </main>
@@ -257,6 +267,9 @@
     </div>
   </div>
   <div class="ffoot">
+    <button class="btn sm" id="profExport" title="Descargar todos sus perfiles como JSON">Exportar</button>
+    <button class="btn sm" id="profImport" title="Cargar perfiles desde un JSON">Importar</button>
+    <input type="file" id="profFile" accept=".json,application/json" hidden>
     <span id="dlgNote" class="muted"></span>
     <span class="grow"></span>
     <button class="btn" id="dlgDelete"><i data-icon="trash"></i>Eliminar</button>
@@ -289,9 +302,9 @@
 <!-- ================= Acerca de ================= -->
 <dialog id="aboutDlg" class="about">
   <div class="ab-cover">
-    <img src="/static/assets/trazo-simbolo.svg" alt="" width="72" height="72">
+    <img src="assets/trazo-simbolo.svg" alt="" width="72" height="72">
     <div>
-      <img src="/static/assets/trazo-nombre-blanco.svg" alt="Trazo" height="22">
+      <img src="assets/trazo-nombre-blanco.svg" alt="Trazo" height="22">
       <div class="ab-sub">Generador de G-code para plotter de pluma</div>
       <div class="ab-ver mono" id="aboutVer"></div>
     </div>
@@ -312,16 +325,17 @@
         <tr><td class="mono">Arrastrar diseño</td><td>Mover sobre el material</td></tr>
       </tbody>
     </table>
-    <p class="caption">Perfiles propios: <span class="mono" id="aboutPath"></span></p>
+    <p class="caption">Todo se calcula en su navegador; los archivos no salen de su computadora.
+      Sus perfiles se guardan en este navegador (puede exportarlos desde cualquier ficha de perfiles).</p>
     <p class="caption">Tipografías IBM Plex y Syncopate bajo licencia SIL Open Font License 1.1.</p>
   </div>
   <div class="ab-sign">
     <span>Desarrollado por</span>
-    <img src="/static/assets/tritic-logo-blanco.svg" alt="Tritic" width="96">
+    <img src="assets/tritic-logo-blanco.svg" alt="Tritic" width="96">
   </div>
 </dialog>
 
-<script src="/static/icons.js"></script>
-<script src="/static/app.js"></script>
+<script src="icons.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

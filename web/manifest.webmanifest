@@ -1,0 +1,16 @@
+{
+  "name": "Trazo · Tritic",
+  "short_name": "Trazo",
+  "description": "Generador de G-code para plotter de pluma en impresoras 3D",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#04202F",
+  "theme_color": "#04202F",
+  "icons": [
+    { "src": "assets/trazo-simbolo.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "assets/trazo-simbolo-256.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "assets/trazo-simbolo-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

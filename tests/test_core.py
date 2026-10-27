@@ -28,7 +28,7 @@ def _data():
 def ink(paths, tip):
     """Región que cubre la tinta de una lista de trayectorias."""
     parts = [LineString(p).buffer(tip / 2) if len(p) > 1 else shapely.Point(p[0]).buffer(tip / 2) for p in paths]
-    return shapely.union_all(parts)
+    return shapely.union_all(parts, grid_size=1e-6)  # precisión fija: robusto también con el GEOS de Pyodide
 
 
 # --- importadores ---------------------------------------------------------
@@ -239,23 +239,39 @@ def test_ascii_messages():
 
 # --- servidor -------------------------------------------------------------
 
-def test_server_roundtrip():
-    from fastapi.testclient import TestClient
-    from trazo.server import app
-    c = TestClient(app)
-    meta = c.get("/api/meta").json()
-    assert meta["profiles"]["machines"]
-    with open(DATA / "sample.dxf", "rb") as fh:
-        up = c.post("/api/upload", files={"file": ("sample.dxf", fh)}).json()
-    res = c.post("/api/plan", json={"file_id": up["file_id"], "settings": {"group_by": "layer"}}).json()
+def test_webapi_roundtrip(tmp_path):
+    import base64
+    import json
+    import shutil
+    from trazo import webapi
+
+    def call(name, *args):
+        res = json.loads(webapi.call(name, *args))
+        assert "error" not in res, res.get("error")
+        return res["ok"]
+
+    user = json.dumps({"pens": [{"name": "Mi pluma", "tip": 0.42, "color": "#123456"}]})
+    meta = call("meta", user)
+    assert any(p["name"] == "Mi pluma" and not p["_builtin"] for p in meta["profiles"]["pens"])
+    src = tmp_path / "sample.dxf"
+    shutil.copy(DATA / "sample.dxf", src)
+    f = call("open_path", "sample.dxf", str(src))
+    res = call("plan", f["file_id"], json.dumps({"group_by": "layer", "default_pen": "Mi pluma"}), user)
     assert {g["key"] for g in res["groups"]} >= {"CORTE", "GRABADO"}
-    r = c.post("/api/gcode", json={"file_id": up["file_id"], "settings": {"per_pen": False}})
-    assert r.status_code == 200 and r.text.startswith("; Generado por Trazo")
-    r = c.put("/api/profiles/pens", json={"name": "Mi pluma", "tip": 0.42})
-    assert r.status_code == 200
-    assert any(p["name"] == "Mi pluma" for p in c.get("/api/meta").json()["profiles"]["pens"])
-    bad = c.post("/api/upload", files={"file": ("x.pdf", b"%PDF")})
-    assert bad.status_code == 400
+    assert res["jobs"][0]["pen"] == "Mi pluma"
+    one = call("gcode", f["file_id"], json.dumps({"default_pen": "Mi pluma"}), user)
+    assert one["text"].startswith("; Generado por Trazo")
+    many = call("gcode", f["file_id"], json.dumps({"per_pen": True, "group_by": "layer",
+                                                     "pen_map": {"CORTE": "Sharpie fino"}}), user)
+    assert many["name"].endswith(".zip") and base64.b64decode(many["b64"])[:2] == b"PK"
+    cal = call("calibration", json.dumps({"pen": "Mi pluma"}), user, False)
+    assert cal["stats"]["draw_mm"] > 100
+    norm = call("normalize_profile", "pens", json.dumps({"name": "X", "tip": "0.3", "basura": 1}))
+    assert "basura" not in norm and norm["name"] == "X"
+    bad = json.loads(webapi.call("open_path", "x.pdf", "/tmp/x.pdf"))
+    assert "Formato no soportado" in bad["error"]
+    missing = json.loads(webapi.call("plan", f["file_id"], json.dumps({"machine": "No existe"}), user))
+    assert "Perfil" in missing["error"]
 
 
 # --- densidad / escala de grises ------------------------------------------
@@ -310,3 +326,29 @@ def test_density_map_overrides():
     g = next(g for g in half.plan.groups if g.key == "#0000ff")
     assert g.density == pytest.approx(0.3)
     assert half.plan.matrix is not None
+
+
+# --- estrés: combinaciones de ajustes (también se corre dentro de Pyodide) --
+
+@pytest.mark.parametrize("src,imp", [
+    ("sample.svg", {}), ("sample.dxf", {}),
+    ("logo.png", {"raster_mode": "trace", "colors": 2, "width_mm": 60}),
+    ("foto.jpg", {"raster_mode": "grays", "levels": 3, "width_mm": 50}),
+    ("linea.png", {"raster_mode": "centerline", "width_mm": 50}),
+])
+def test_stress_settings(src, imp):
+    st = ProfileStore()
+    doc = importers.load(str(DATA / src), **imp)
+    combos = [
+        {"fill": {"pattern": "zigzag", "angle": 30}, "density_map": {}},
+        {"fill": {"pattern": "cross", "outline_passes": 2}, "layout": {"rotate": 37, "scale_mode": "fit"}},
+        {"fill": {"pattern": "concentric"}, "layout": {"mirror_x": True}, "stroke": {"pattern": "zigzag"}},
+        {"fill": {"pattern": "lines", "thin": "outline", "link_light": True},
+         "layout": {"scale_mode": "factor", "scale": 0.4}},
+        {"fill": {"pattern": "none", "fill_rule": "nonzero"}, "default_pen": "Marcador mediano 2 mm"},
+    ]
+    for d in combos:
+        groups = pipeline.groups(doc, "color")
+        d = {"default_pen": "Fineliner 0.5", **d, "density_map": {g.key: 0.35 for g in groups[::2]}}
+        out = job.run(doc, d, st)
+        assert out.stats.out_of_bounds == 0

@@ -51,16 +51,85 @@ function merge(base, extra) {
   }
   return base;
 }
-async function api(url, body, raw = false) {
-  const r = await fetch(url, body === undefined ? {} : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    let msg = r.statusText;
-    try { msg = (await r.json()).detail || msg; } catch (_) { /* sin JSON */ }
-    throw new Error(msg);
+// ---------- motor (Pyodide en un Web Worker) ----------
+let worker = null;
+const pending = new Map();
+let rpcId = 0;
+S.engine = { ready: false, pct: 0 };
+function startWorker() {
+  worker = new Worker("worker.js");
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === "status") return engineStatus(m.text, m.pct);
+    if (m.type === "fatal") return engineFatal(m.text);
+    const p = pending.get(m.id);
+    if (!p) return;
+    pending.delete(m.id);
+    if (m.result && m.result.error !== undefined) p.reject(new Error(m.result.error));
+    else p.resolve(m.result ? m.result.ok : undefined);
+    if (m.fatal) restartWorker();
+  };
+  worker.onerror = (e) => engineFatal(e.message || "no se pudo iniciar el motor");
+}
+// si el motor queda inutilizable se reinicia y se vuelve a abrir el archivo actual
+async function restartWorker() {
+  worker.terminate();
+  for (const p of pending.values()) p.reject(new Error("El motor se reinició"));
+  pending.clear();
+  startWorker();
+  toast("El motor de cálculo se reinició tras un error. Revise los ajustes del último cambio.", "warn");
+  if (S.fileBlob) {
+    try {
+      const buffer = await S.fileBlob.arrayBuffer();
+      S.file = Object.assign(await rpc("open", [], { name: S.fileBlob.name, buffer }), { viewable: S.file && S.file.viewable });
+    } catch (_) { S.file = null; }
   }
-  return raw ? r : r.json();
+}
+startWorker();
+function rpc(method, args = [], file = null) {
+  return new Promise((resolve, reject) => {
+    const id = ++rpcId;
+    pending.set(id, { resolve, reject });
+    worker.postMessage({ id, method, args, file }, file ? [file.buffer] : []);
+  });
+}
+function engineStatus(text, pct) {
+  const ready = pct >= 100;
+  S.engine = { ready, pct };
+  $("#engineBar").style.width = `${pct}%`;
+  $("#engineText").textContent = ready ? "Motor listo." : `${text} ${Math.round(pct)} %`;
+  $("#engine").classList.toggle("done", ready);
+  if (!S.timer && !S.req) $("#state").textContent = ready ? "Listo" : "Cargando motor…";
+}
+function engineFatal(text) {
+  $("#engine").classList.add("fail");
+  $("#engineText").textContent = "No se pudo iniciar el motor: " + text;
+  toast("No se pudo iniciar el motor de cálculo. Recargue la página. (" + text + ")");
+}
+
+// ---------- perfiles propios (guardados en este navegador) ----------
+const PROF_KEY = "trazo.profiles.v1";
+const userProfiles = () => Object.assign({ machines: [], pens: [], materials: [] }, loadJSON(PROF_KEY) || {});
+const profilesJSON = () => JSON.stringify(userProfiles());
+function putProfile(kind, p) {
+  const all = userProfiles();
+  all[kind] = all[kind].filter((x) => x.name !== p.name).concat([p]);
+  saveJSON(PROF_KEY, all);
+}
+function dropProfile(kind, name) {
+  const all = userProfiles();
+  all[kind] = all[kind].filter((x) => x.name !== name);
+  saveJSON(PROF_KEY, all);
+}
+function downloadData(d) {
+  const blob = d.b64
+    ? new Blob([Uint8Array.from(atob(d.b64), (c) => c.charCodeAt(0))], { type: d.mime })
+    : new Blob([d.text], { type: d.mime || "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), { href: url, download: d.name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return d.name;
 }
 function busy(on, label = "Calculando…") {
   $("#loadbar").hidden = !on;
@@ -77,18 +146,18 @@ function toast(msg, kind = "err") {
 
 // ---------- inicio ----------
 async function loadMeta() {
-  S.meta = await api("/api/meta");
+  S.meta = await rpc("meta", [profilesJSON()]);
   for (const sel of $$("select.prof")) {
     sel.innerHTML = S.meta.profiles[sel.dataset.kind].map((p) => `<option>${esc(p.name)}</option>`).join("");
   }
   $("#calPen").innerHTML = S.meta.profiles.pens.map((p) => `<option>${esc(p.name)}</option>`).join("");
   $("#verInfo").textContent = `Trazo ${S.meta.version}`;
   $("#aboutVer").textContent = `Versión ${S.meta.version}`;
-  $("#aboutPath").textContent = S.meta.profiles_path;
 }
 
 async function init() {
   hydrateIcons();
+  renderInspector();
   await loadMeta();
   $("#fontSel").innerHTML = S.meta.fonts.map((f) => `<option>${f}</option>`).join("");
   const d = structuredClone(S.meta.defaults);
@@ -107,6 +176,7 @@ async function init() {
   $("#tOrig").classList.toggle("on", UI.orig);
   setInspector(inspOn());
   refreshUI(); renderFile(); renderInspector();
+  document.body.classList.remove("booting");
   fitView(); draw();
 }
 
@@ -220,7 +290,7 @@ async function replan() {
   const id = ++S.req;
   busy(true);
   try {
-    const res = await api("/api/plan", { file_id: S.file.file_id, settings: S.settings });
+    const res = await rpc("plan", [S.file.file_id, JSON.stringify(S.settings), profilesJSON()]);
     if (id !== S.req) return;
     const first = !S.plan;
     S.plan = res;
@@ -363,13 +433,13 @@ function renderInspector() {
 
 // ---------- archivo ----------
 async function openFile(f) {
-  const fd = new FormData(); fd.append("file", f);
-  busy(true, "Leyendo archivo…");
+  busy(true, S.engine.ready ? "Leyendo archivo…" : "Esperando al motor…");
   try {
-    const r = await fetch("/api/upload", { method: "POST", body: fd });
-    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-    S.file = await r.json();
+    const buffer = await f.arrayBuffer();
+    S.file = await rpc("open", [], { name: f.name, buffer });
     S.file.viewable = /\.(svg|png|jpe?g|gif|webp|bmp)$/i.test(S.file.name);
+    if (S.orig && S.orig.url) URL.revokeObjectURL(S.orig.url);
+    S.fileBlob = f;
     S.plan = null; S.calibration = false; S.orig = null;
     S.settings.layout.offset_x = 0; S.settings.layout.offset_y = 0; writeAll();
     $("#empty").hidden = true;
@@ -382,8 +452,7 @@ async function generate() {
   if (!S.file) return;
   busy(true, "Generando G-code…");
   try {
-    const r = await api("/api/gcode", { file_id: S.file.file_id, settings: S.settings }, true);
-    const name = await saveBlob(r);
+    const name = downloadData(await rpc("gcode", [S.file.file_id, JSON.stringify(S.settings), profilesJSON()]));
     toast(`${name} descargado. Cópielo a la tarjeta SD.`, "ok");
   } catch (e) { toast(e.message); } finally { busy(false); }
 }
@@ -401,15 +470,6 @@ function setupFile() {
     if (e.dataTransfer.files[0]) openFile(e.dataTransfer.files[0]);
   });
   $("#btnGen").addEventListener("click", generate);
-}
-async function saveBlob(r) {
-  const cd = r.headers.get("Content-Disposition") || "";
-  const name = (cd.match(/filename="([^"]+)"/) || [])[1] || "trazo.gcode";
-  const url = URL.createObjectURL(await r.blob());
-  const a = Object.assign(document.createElement("a"), { href: url, download: name });
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-  return name;
 }
 function setupKeys() {
   document.addEventListener("keydown", (e) => {
@@ -540,8 +600,9 @@ function origImage() {
   if (!S.orig || S.orig.fid !== S.file.file_id) {
     const img = new Image();
     img.onload = draw;
-    img.src = `/api/source/${S.file.file_id}`;
-    S.orig = { fid: S.file.file_id, img };
+    const url = URL.createObjectURL(S.fileBlob);
+    img.src = url;
+    S.orig = { fid: S.file.file_id, img, url };
   }
   return S.orig.img.complete && S.orig.img.naturalWidth ? S.orig.img : null;
 }
@@ -740,8 +801,24 @@ function setupDialogs() {
     const p = prof(dlgKind, dlgName);
     const msg = p._builtin ? `¿Restablecer «${dlgName}» a sus valores integrados?` : `¿Eliminar el perfil «${dlgName}»?`;
     if (!confirm(msg)) return;
-    await fetch(`/api/profiles/${dlgKind}/${encodeURIComponent(dlgName)}`, { method: "DELETE" });
+    dropProfile(dlgKind, dlgName);
     await afterProfileChange(null);
+  });
+  $("#profExport").addEventListener("click", () => {
+    downloadData({ name: "trazo-perfiles.json", mime: "application/json", text: JSON.stringify(userProfiles(), null, 2) });
+  });
+  $("#profImport").addEventListener("click", () => { $("#profFile").value = ""; $("#profFile").click(); });
+  $("#profFile").addEventListener("change", async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      let n = 0;
+      for (const kind of ["machines", "pens", "materials"]) {
+        for (const p of data[kind] || []) { putProfile(kind, await rpc("normalize_profile", [kind, JSON.stringify(p)])); n++; }
+      }
+      await afterProfileChange(dlgName);
+      toast(`${n} perfil(es) importados.`, "ok");
+    } catch (err) { toast("No se pudo importar: " + err.message); }
   });
   for (const b of $$("dialog [data-close]")) b.addEventListener("click", () => b.closest("dialog").close());
   for (const d of $$("dialog")) d.addEventListener("click", (e) => { if (e.target === d) d.close(); });
@@ -750,8 +827,8 @@ function setupDialogs() {
   $("#calPreview").addEventListener("click", () => { $("#calDlg").close(); S.calibration = true; calPreview(); });
   $("#calDownload").addEventListener("click", async () => {
     try {
-      const r = await api("/api/calibration", { ...calBody(), download: true }, true);
-      const name = await saveBlob(r); $("#calDlg").close(); toast(`${name} descargado.`, "ok");
+      const name = downloadData(await rpc("calibration", [JSON.stringify(calBody()), profilesJSON(), true]));
+      $("#calDlg").close(); toast(`${name} descargado.`, "ok");
     } catch (e) { toast(e.message); }
   });
 }
@@ -759,7 +836,7 @@ function calBody() { return { machine: S.settings.machine, material: S.settings.
 async function calPreview() {
   try {
     busy(true);
-    S.plan = await api("/api/calibration", calBody());
+    S.plan = await rpc("calibration", [JSON.stringify(calBody()), profilesJSON(), false]);
     S.plan.groups = []; S.plan.design_bounds = null;
     $("#empty").hidden = true;
     renderInspector(); refreshUI(); draw();
@@ -813,9 +890,9 @@ function collectProfile() {
 }
 async function saveProfile(p) {
   try {
-    const r = await fetch(`/api/profiles/${dlgKind}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-    if (!r.ok) throw new Error((await r.json()).detail);
-    await afterProfileChange(p.name);
+    const clean = await rpc("normalize_profile", [dlgKind, JSON.stringify(p)]);
+    putProfile(dlgKind, clean);
+    await afterProfileChange(clean.name);
     toast(`Perfil «${p.name}» guardado.`, "ok");
   } catch (e) { toast(e.message); }
 }
@@ -830,4 +907,7 @@ async function afterProfileChange(name) {
 }
 
 window.addEventListener("resize", () => setInspector(inspOn()));
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
 init().catch((e) => toast("Error al iniciar: " + e.message));

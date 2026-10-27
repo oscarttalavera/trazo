@@ -19,31 +19,43 @@ El **ancho de línea** se ajusta al diámetro de la punta:
 
 ---
 
-## 1. Instalación
+## 1. Cómo funciona y cómo se publica
 
-### Windows, sin Python (recomendado)
-1. En GitHub, abra **Releases** y descargue `Trazo-windows.zip`.
-   - Si no hay un Release, vaya a **Actions → build-windows**, abra la última
-     ejecución correcta y descargue el artefacto **Trazo-windows**.
-2. Descomprima el archivo y abra `Trazo\Trazo.exe`. Se abre el navegador con
-   la interfaz (`http://127.0.0.1:8765`).
-3. La ventana negra es el servidor local: ciérrela para salir.
+Trazo es un **sitio web 100 % estático**. Todo el cálculo (lectura de archivos,
+rellenos, optimización y G-code) corre **dentro del navegador** con
+[Pyodide](https://pyodide.org) (Python compilado a WebAssembly), en un hilo
+aparte para que la interfaz no se congele.
 
-> Windows SmartScreen puede advertir «aplicación no reconocida» porque el
-> ejecutable no está firmado: elija *Más información → Ejecutar de todas formas*.
+- **Privacidad:** los archivos del usuario **nunca se suben a ningún servidor**.
+- **Sin backend:** no hay servidor que mantener ni costo por uso.
+- **Primera visita:** se descargan ~17 MB (el motor). Después todo queda en
+  caché y **funciona sin conexión**, incluso instalado como app (PWA).
+- **Carga a demanda:** el lector DXF (~2.5 MB) solo se descarga al abrir un DXF.
 
-El ejecutable lo compila GitHub Actions (`.github/workflows/windows.yml`):
-- en cada push a `main` genera un artefacto;
-- al crear una etiqueta `v*` (por ejemplo `v0.1.0`) publica un Release.
+### Publicar en tools.tritic3d.com (o cualquier hosting)
+1. Descargue `trazo-web.zip`:
+   - **Releases** del repositorio, si hay una versión publicada;
+   - o **Actions → web**, el artefacto de la última ejecución.
+2. Descomprímalo y suba **el contenido tal cual** a la carpeta deseada, por
+   ejemplo `tools.tritic3d.com/trazo/`. Todas las rutas son relativas, así que
+   funciona en cualquier subcarpeta.
+3. **Requisitos del hosting:**
+   - HTTPS (lo exige el modo sin conexión);
+   - servir `.wasm` con tipo `application/wasm` (la mayoría ya lo hace);
+   - no bloquear archivos `.whl` ni `.zip`.
 
-### Desde el código (desarrollo, requiere Python 3.10+)
+   No hace falta ninguna cabecera especial ni configuración del servidor.
+
+Opcional: con la variable de repositorio `DEPLOY_PAGES = true`, el workflow
+publica cada cambio de `main` en GitHub Pages. Se puede usar como sitio de
+prueba, o con un dominio propio apuntado por CNAME.
+
+### Probarlo en local
 ```bash
-python -m venv .venv
-.venv/bin/pip install -e .          # Windows: .venv\Scripts\pip install -e .
-.venv/bin/trazo                     # abre la interfaz web
+pip install -e .[dev]
+python tools/build_web.py          # arma site/ (descarga Pyodide la primera vez, ~390 MB)
+python -m http.server -d site 8000 # abrir http://localhost:8000
 ```
-Los scripts `Trazo.bat` y `build_windows.bat` sirven solo en PCs **con Python
-instalado**.
 
 ---
 
@@ -185,7 +197,7 @@ home, comando de pausa y mensaje, y G-code inicial/final extra.
 
 ---
 
-## 7. Línea de comandos
+## 7. Línea de comandos (opcional)
 
 ```bash
 trazo dibujo.svg -o dibujo.gcode --pen "Fineliner 0.5" --fit
@@ -196,19 +208,23 @@ trazo retrato.jpg --raster-mode grays --levels 6 --pen "Fineliner 0.3"
 trazo plano.svg --density "#808080=40" --density "#ff0000=auto" --tone-gamma 1.2
 trazo calibrate --pen "Sharpie fino" --material "Cartón 2 mm"
 trazo profiles          # lista perfiles y dónde se guardan
-trazo serve             # interfaz web
 ```
+La línea de comandos usa el mismo motor que la web; sirve para lotes o
+automatización (`pip install -e .`).
 En `--map CLAVE=`, una pluma vacía omite ese grupo. `--config ajustes.json` acepta el
 mismo formato de ajustes que usa la interfaz.
 
 ## 8. Perfiles
 Hay perfiles integrados de máquinas, plumas (de 0.1 mm a marcador de 2 mm) y
-materiales (bond, cartulina, cartón, MDF, acrílico). Al editarlos o duplicarlos
-se guardan en:
-- **Windows:** `%APPDATA%\Trazo\profiles.json`
-- **Linux/macOS:** `~/.config/trazo/profiles.json`
+materiales (bond, cartulina, cartón, MDF, acrílico).
 
-La variable `TRAZO_HOME` cambia esa carpeta.
+**En la web**, los perfiles propios (editados o duplicados) se guardan **en el
+navegador** de cada usuario. Desde cualquier ficha de perfiles se pueden
+**exportar** a un `.json` e **importar** en otra computadora o navegador.
+
+**En la línea de comandos** se guardan en `%APPDATA%\Trazo\profiles.json`
+(Windows) o `~/.config/trazo/profiles.json`; la variable `TRAZO_HOME` cambia
+esa carpeta.
 
 ---
 
@@ -222,8 +238,8 @@ La interfaz sigue el sistema visual **Tritic** («plano de taller»):
   06 Salida) y el resumen del trabajo tiene forma de *cajetín* técnico.
 - **Tema:** sigue el modo claro u oscuro del sistema.
 
-Todas las tipografías van incluidas en el programa (licencia SIL OFL 1.1),
-así que funciona sin conexión.
+Todas las tipografías van incluidas en el sitio (licencia SIL OFL 1.1), así
+que funciona sin conexión.
 
 **Logotipo** en `docs/marca/`:
 
@@ -232,7 +248,7 @@ así que funciona sin conexión.
 | `trazo-logo.svg` / `.png` | Símbolo + nombre, sobre fondo claro |
 | `trazo-logo-blanco.svg` | Sobre azul Tritic o azul noche |
 | `trazo-simbolo.svg` | Icono de la app; `trazo-simbolo-simple.svg` para 16 px |
-| `trazo.ico` | Icono de `Trazo.exe` (16, 32, 48 y 256 px) |
+| `trazo.ico` | Icono en formato Windows (16, 32, 48 y 256 px) |
 
 El símbolo es un *chip* azul Tritic con retícula de puntos. La T va en verde
 Tritic: la barra es un trazo sólido y el tallo, un **relleno en zigzag** de
@@ -244,17 +260,33 @@ los archivos.
 ## 10. Desarrollo
 ```bash
 pip install -e .[dev]
-python tests/make_data.py   # genera los archivos de prueba
-pytest -q
+python tests/make_data.py                 # genera los archivos de prueba
+pytest -q                                 # pruebas en Python normal
+python tools/build_web.py                 # arma site/
+node tools/test_pyodide.mjs .cache/pyodide-0.29.3/pyodide site   # pruebas DENTRO de Pyodide
 ```
+Las pruebas corren dos veces, en Python normal y dentro de Pyodide. Las
+bibliotecas compiladas a WebAssembly (en especial GEOS 3.12) no se comportan
+igual que las nativas. Por eso todas las operaciones booleanas usan precisión
+fija (`grid_size`): así no pueden fallar por topología, que en el navegador
+detendría el motor. Si el motor llegara a caerse, la interfaz lo reinicia sola.
+
 **Estructura:**
-- `trazo/importers/`: SVG, DXF, imágenes
-- `fill.py`: rellenos y compensación de punta
-- `optimize.py`: orden de trazos
-- `pipeline.py`: disposición, plumas y recorte
-- `gcode.py`: escritura de G-code
-- `server.py` + `web/`: interfaz
-- `cli.py`: línea de comandos
+- `trazo/`: motor en Python, el mismo para la web y la línea de comandos.
+  - `importers/`: SVG, DXF, imágenes
+  - `fill.py`: rellenos y compensación de punta
+  - `optimize.py`: orden de trazos
+  - `pipeline.py`: disposición, plumas y recorte
+  - `gcode.py`: escritura de G-code
+  - `imgproc.py`: umbral, esqueleto, Canny y filtros, con numpy puro
+  - `webapi.py`: lo que llama el navegador
+- `web/`: interfaz (HTML/CSS/JS sin compilación).
+  - `worker.js`: carga Pyodide y ejecuta el motor
+  - `sw.js`: caché para trabajar sin conexión
+- `tools/`:
+  - `build_web.py`: arma el sitio
+  - `test_pyodide.mjs`: corre las pruebas dentro de Pyodide
+  - `logo.py`: genera el logotipo
 
 ### Pendiente / ideas
 - Arcos `G2/G3` opcionales para archivos más pequeños.

@@ -16,6 +16,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from .. import geometry as g
+from .. import imgproc
 from .. import tone
 
 MODES = ("trace", "grays", "centerline", "hatch", "edges")
@@ -66,7 +67,6 @@ def load(path: str, raster_mode: str = "trace", width_mm: float | None = None,
             if paths:
                 doc.items.append(g.Item("fill", paths, [True] * len(paths), color, 0.0, name))
     elif raster_mode == "grays":
-        from scipy.ndimage import median_filter
         # cobertura de tinta que reproduce la luminancia de cada píxel
         lin = np.where(gray <= 0.04045, gray / 12.92, ((gray + 0.055) / 1.055) ** 2.4)
         cov = 1.0 - lin
@@ -74,7 +74,7 @@ def load(path: str, raster_mode: str = "trace", width_mm: float | None = None,
             cov = 1.0 - cov
         cov = np.clip(cov, 0, 1) ** (1.0 / max(gamma, 0.05))
         n = max(1, int(levels))
-        q = median_filter(np.rint(cov * n).astype(np.int16), size=3)
+        q = imgproc.median3(np.rint(cov * n).astype(np.int16))
         for k in range(n, 0, -1):
             mask = q == k
             if mask.mean() < 0.0005:
@@ -86,14 +86,12 @@ def load(path: str, raster_mode: str = "trace", width_mm: float | None = None,
                 doc.items.append(g.Item("fill", paths, [True] * len(paths), tone.gray_for_density(d), 0.0,
                                         f"gris {round(d * 100)}%"))
     elif raster_mode == "centerline":
-        from skimage.morphology import skeletonize
         mask = _bw_mask(dark, threshold)
-        for p in _skeleton_paths(skeletonize(mask)):
+        for p in _skeleton_paths(imgproc.skeletonize(mask)):
             p = g.simplify(p.astype(float), 0.7)
             doc.items.append(g.Item("stroke", [to_mm(p[:, ::-1])], [False], "#000000", 0.0, "línea"))
     elif raster_mode == "edges":
-        from skimage.feature import canny
-        e = canny(gray, sigma=edge_sigma)
+        e = imgproc.canny(gray, sigma=edge_sigma)
         for p in _skeleton_paths(e):
             p = g.simplify(p.astype(float), 0.7)
             doc.items.append(g.Item("stroke", [to_mm(p[:, ::-1])], [False], "#000000", 0.0, "bordes"))
@@ -117,11 +115,7 @@ def load(path: str, raster_mode: str = "trace", width_mm: float | None = None,
 
 def _bw_mask(dark: np.ndarray, threshold: float | None) -> np.ndarray:
     if threshold is None:
-        from skimage.filters import threshold_otsu
-        try:
-            t = float(threshold_otsu(dark))
-        except ValueError:
-            t = 0.5
+        t = imgproc.otsu(dark)
         t = min(max(t, 0.15), 0.85)
     else:
         t = float(threshold)
@@ -228,7 +222,6 @@ def _skeleton_paths(skel: np.ndarray, min_px: int = 3) -> list[np.ndarray]:
 # --- Rayado por tonos -----------------------------------------------------
 
 def _tone_hatch(dark: np.ndarray, mmpx: float, levels: int, spacing: float, angle: float):
-    from scipy.ndimage import map_coordinates
     H, W = dark.shape
     Wmm, Hmm = W * mmpx, H * mmpx
     angles = [angle, angle + 90, angle + 45, angle - 45, angle + 22.5, angle - 22.5]
@@ -251,7 +244,7 @@ def _tone_hatch(dark: np.ndarray, mmpx: float, levels: int, spacing: float, angl
                 continue
             col = pts[:, 0] / mmpx - 0.5
             row = (Hmm - pts[:, 1]) / mmpx - 0.5
-            v = map_coordinates(dark, [row, col], order=1, mode="nearest")
+            v = imgproc.bilinear(dark, row, col)
             on = inside & (v > thr)
             if not on.any():
                 continue

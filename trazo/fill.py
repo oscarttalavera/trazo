@@ -28,6 +28,23 @@ from .geometry import Item
 
 PATTERNS = ("lines", "zigzag", "cross", "concentric", "none")
 
+# Todas las operaciones booleanas usan precisión fija (redondeo a 1 nm): GEOS
+# hace entonces un «snap-rounding» que nunca falla por topología. Sin esto,
+# geometrías casi coincidentes pueden lanzar TopologyException, y dentro del
+# navegador (Pyodide) esa excepción detiene el motor por completo.
+GRID = 1e-6
+
+
+def _union(geoms) -> BaseGeometry:
+    geoms = [g for g in geoms if g is not None and not g.is_empty]
+    return shapely.union_all(geoms, grid_size=GRID) if geoms else Polygon()
+
+
+def _difference(a: BaseGeometry, b: BaseGeometry) -> BaseGeometry:
+    if a.is_empty or b.is_empty:
+        return a
+    return shapely.difference(a, b, grid_size=GRID)
+
 
 @dataclass
 class FillSettings:
@@ -63,7 +80,8 @@ def _xor_all(geoms: list[BaseGeometry]) -> BaseGeometry:
     if not geoms:
         return Polygon()
     while len(geoms) > 1:  # reducción balanceada
-        nxt = [shapely.symmetric_difference(geoms[i], geoms[i + 1]) for i in range(0, len(geoms) - 1, 2)]
+        nxt = [shapely.symmetric_difference(geoms[i], geoms[i + 1], grid_size=GRID)
+               for i in range(0, len(geoms) - 1, 2)]
         if len(geoms) % 2:
             nxt.append(geoms[-1])
         geoms = nxt
@@ -79,7 +97,7 @@ def region(item: Item, rule: str = "evenodd") -> BaseGeometry:
             if not poly.is_empty:
                 polys.append(poly)
     if rule == "nonzero":
-        return shapely.union_all(polys) if polys else Polygon()
+        return _union(polys)
     return _polygonal(shapely.make_valid(_xor_all(polys)))
 
 
@@ -90,7 +108,7 @@ def _polygonal(geom: BaseGeometry) -> BaseGeometry:
     if isinstance(geom, (Polygon, MultiPolygon)):
         return geom
     parts = [g for g in getattr(geom, "geoms", []) if isinstance(g, (Polygon, MultiPolygon))]
-    return shapely.union_all(parts) if parts else Polygon()
+    return _union(parts)
 
 
 def _polys(geom: BaseGeometry) -> list[Polygon]:
@@ -138,7 +156,7 @@ def _hatch(geom: BaseGeometry, spacing: float, angle: float, link: bool, tip: fl
         ys = np.array([(miny + maxy) / 2])
     scan = shapely.linestrings([[[minx - 1, y], [maxx + 1, y]] for y in ys])
     shapely.prepare(rot)
-    inter = shapely.intersection(scan, rot)
+    inter = shapely.intersection(scan, rot, grid_size=GRID)
     rows: list[list[np.ndarray]] = []
     for gg in inter:
         segs = [s for s in _lines(gg) if len(s) >= 2]
@@ -199,7 +217,7 @@ def _concentric(geom: BaseGeometry, spacing: float, tip: float, max_rings: int =
         out += _rings(cur)
         # núcleo que el último anillo no alcanza a cubrir -> pasada por el eje
         nxt = geom.buffer(-(k + 1) * spacing)
-        core = cur.difference(nxt.buffer(spacing)) if not nxt.is_empty else cur
+        core = _difference(cur, nxt.buffer(spacing)) if not nxt.is_empty else cur
         for poly in _polys(core):
             if not poly.buffer(-tip / 2 * 0.98).is_empty:
                 out += _centerlines(poly, tip)
@@ -210,10 +228,9 @@ def _concentric(geom: BaseGeometry, spacing: float, tip: float, max_rings: int =
 
 def _centerlines(geom: BaseGeometry, tip: float) -> list[np.ndarray]:
     """Eje central aproximado de regiones delgadas (rasteriza y esqueletiza)."""
-    from skimage.draw import polygon as fill_poly
-    from skimage.morphology import skeletonize
-    from .importers.raster import _skeleton_paths
     from .geometry import simplify
+    from .imgproc import rasterize, skeletonize
+    from .importers.raster import _skeleton_paths
 
     if geom.is_empty:
         return []
@@ -223,16 +240,9 @@ def _centerlines(geom: BaseGeometry, tip: float) -> list[np.ndarray]:
     if max(W, H) > 3000:
         res *= max(W, H) / 3000
         W, H = (maxx - minx) / res + 4, (maxy - miny) / res + 4
-    img = np.zeros((int(H) + 1, int(W) + 1), bool)
-    for p in _polys(geom):
-        def draw(ring, val):
-            c = (np.asarray(ring.coords)[:, 0] - minx) / res + 2
-            r = (np.asarray(ring.coords)[:, 1] - miny) / res + 2
-            rr, cc = fill_poly(r, c, img.shape)
-            img[rr, cc] = val
-        draw(p.exterior, True)
-        for hole in p.interiors:
-            draw(hole, False)
+    polys = [(np.asarray(p.exterior.coords), [np.asarray(h.coords) for h in p.interiors]) for p in _polys(geom)]
+    to_px = lambda xy: np.column_stack([(xy[:, 0] - minx) / res + 2, (xy[:, 1] - miny) / res + 2])  # noqa: E731
+    img = rasterize(polys, (int(H) + 1, int(W) + 1), to_px)
     out = []
     for pth in _skeleton_paths(skeletonize(img), min_px=2):
         pth = simplify(pth, 0.7)
@@ -281,12 +291,12 @@ def fill_geometry(geom: BaseGeometry, tip: float, overlap: float, fs: FillSettin
 
     # partes que la punta no alcanza (más delgadas que el diámetro)
     if compensate and fs.thin != "skip":
-        rest = geom.difference(inner.buffer(r * 1.02)) if not inner.is_empty else geom
+        rest = _difference(geom, inner.buffer(r * 1.02)) if not inner.is_empty else geom
         slivers = [p for p in _polys(rest)
                    if p.area > tip * tip * 0.35 and p.minimum_rotated_rectangle.length > 2.5 * tip]
         if slivers:
             thin = len(slivers)
-            sg = shapely.union_all(slivers)
+            sg = _union(slivers)
             paths += _centerlines(sg, tip) if fs.thin == "centerline" else _rings(sg)
     elif compensate:
         lost = geom.area - inner.buffer(r).area
@@ -340,7 +350,7 @@ def item_paths(item: Item, tip: float, overlap: float, fs: FillSettings, ss: Str
         elif len(p) >= 2:
             pts = np.vstack([p, p[:1]]) if closed and not np.allclose(p[0], p[-1]) else p
             parts.append(LineString(pts).buffer(hw, cap_style="round", join_style="round"))
-    geom = shapely.union_all(parts) if parts else Polygon()
+    geom = _union(parts)
     sfs = FillSettings(pattern=ss.pattern, angle=fs.angle, outline=True, compensate=True, thin="centerline",
                        outline_light=fs.outline_light, link_light=fs.link_light)
     return fill_geometry(geom, tip, overlap, sfs, density)
