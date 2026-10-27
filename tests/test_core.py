@@ -256,3 +256,57 @@ def test_server_roundtrip():
     assert any(p["name"] == "Mi pluma" for p in c.get("/api/meta").json()["profiles"]["pens"])
     bad = c.post("/api/upload", files={"file": ("x.pdf", b"%PDF")})
     assert bad.status_code == 400
+
+
+# --- densidad / escala de grises ------------------------------------------
+
+def test_tone_roundtrip_and_rules():
+    from trazo import tone
+    for d in (0.1, 0.25, 0.5, 0.8, 1.0):
+        assert tone.tone_density(tone.gray_for_density(d)) == pytest.approx(d, abs=0.01)
+    assert tone.resolve(None, "#000000") == pytest.approx(1.0)
+    assert tone.resolve(None, "#808080") < 0.9          # gris -> auto
+    assert tone.resolve(None, "#ff0000") == 1.0          # color -> sólido
+    assert tone.resolve("auto", "#ff0000") < 1.0
+    assert tone.resolve(40, "#000000") == pytest.approx(0.4)
+    assert tone.resolve(0.4, "#000000") == pytest.approx(0.4)
+
+
+@pytest.mark.parametrize("pattern", ["lines", "zigzag", "cross", "concentric"])
+@pytest.mark.parametrize("density", [0.2, 0.5, 0.8])
+def test_density_coverage(pattern, density):
+    sq = box(0, 0, 30, 30)
+    tip = 0.5
+    r = F.fill_geometry(sq, tip, 0.1, F.FillSettings(pattern=pattern), density)
+    cov = ink(r.paths, tip).intersection(sq).area / sq.area
+    assert cov == pytest.approx(density, abs=0.08)
+
+
+def test_density_zero_skips_and_solid_unchanged():
+    sq = box(0, 0, 10, 10)
+    assert F.fill_geometry(sq, 0.5, 0.1, F.FillSettings(), 0.0).paths == []
+    a = F.fill_geometry(sq, 0.5, 0.1, F.FillSettings(), 1.0).paths
+    b = F.fill_geometry(sq, 0.5, 0.1, F.FillSettings()).paths
+    assert len(a) == len(b)
+
+
+def test_grays_mode_single_pen():
+    st = ProfileStore()
+    doc = importers.load(str(DATA / "foto.jpg"), raster_mode="grays", levels=4, width_mm=80)
+    assert len(doc.items) == 4 and doc.extent == (0.0, 0.0, 80.0, 60.0)
+    out = job.run(doc, {"default_pen": "Fineliner 0.3"}, st)
+    assert len(out.plan.jobs) == 1                       # una sola pluma, sin cambios
+    dens = sorted(round(g.density, 2) for g in out.plan.groups)
+    assert dens == [0.25, 0.5, 0.75, 1.0]
+    assert out.files[0].text.count("M0 ") == 1           # solo la inserción inicial
+
+
+def test_density_map_overrides():
+    st = ProfileStore()
+    doc = importers.load(str(DATA / "sample.svg"))
+    full = job.run(doc, {"default_pen": "Fineliner 0.5"}, st)
+    half = job.run(doc, {"default_pen": "Fineliner 0.5", "density_map": {"#0000ff": 0.3}}, st)
+    assert half.stats.draw_mm < full.stats.draw_mm
+    g = next(g for g in half.plan.groups if g.key == "#0000ff")
+    assert g.density == pytest.approx(0.3)
+    assert half.plan.matrix is not None

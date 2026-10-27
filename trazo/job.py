@@ -25,8 +25,8 @@ def settings_from_dict(d: dict) -> pipeline.Settings:
     _apply(s.layout, d.get("layout"))
     _apply(s.fill, d.get("fill"))
     _apply(s.stroke, d.get("stroke"))
-    for k in ("group_by", "pen_map", "default_pen", "group_order", "simplify_tol", "merge_tol", "min_len",
-              "reorder", "clip"):
+    for k in ("group_by", "pen_map", "default_pen", "group_order", "density_map", "density_gamma",
+              "simplify_tol", "merge_tol", "min_len", "reorder", "clip"):
         if k in d and (d[k] is not None or k == "merge_tol"):
             setattr(s, k, d[k])
     return s
@@ -38,6 +38,7 @@ def default_settings() -> dict:
         "layout": asdict(s.layout), "fill": asdict(s.fill), "stroke": asdict(s.stroke),
         "group_by": s.group_by, "simplify_tol": s.simplify_tol, "merge_tol": s.merge_tol,
         "min_len": s.min_len, "reorder": s.reorder, "clip": s.clip, "per_pen": False,
+        "density_gamma": s.density_gamma,
         "import": {"curve_tol": 0.05, "text_font": "futural", "raster_mode": "trace",
                    "width_mm": None, "threshold": None, "invert": False, "colors": 1,
                    "levels": 4, "hatch_spacing": 1.0, "hatch_angle": 45.0, "gamma": 1.0,
@@ -79,6 +80,7 @@ def summary(out: Output) -> dict:
         "drawable": out.plan.drawable,
         "design_bounds": out.plan.design_bounds,
         "scale": out.plan.scale,
+        "matrix": out.plan.matrix,
         "stats": {"draw_mm": st.draw_mm, "travel_mm": st.travel_mm, "lifts": st.lifts,
                   "seconds": st.seconds, "time": gcode.format_time(st.seconds),
                   "per_pen": st.per_pen},

@@ -8,6 +8,10 @@ Reglas:
   * Partes más delgadas que la punta: se dibujan por su eje central.
   * Trazo más ancho que la punta: se convierte en región y se rellena con
     pasadas paralelas (concéntricas por defecto).
+  * Densidad < 100 % (escala de grises con una sola pluma): se abre la
+    separación entre líneas para cubrir solo esa fracción del área.
+      líneas/zigzag/concéntrico: separación = punta / d
+      cruzado (dos direcciones): separación = punta / (1 - sqrt(1 - d))
 """
 from __future__ import annotations
 
@@ -34,6 +38,8 @@ class FillSettings:
     fill_rule: str = "evenodd"  # evenodd | nonzero
     compensate: bool = True
     thin: str = "centerline"    # centerline | outline | skip
+    outline_light: bool = False  # dibujar contorno también en densidades < 100 %
+    link_light: bool = False     # enlazar líneas (zigzag) en densidades < 100 %: menos levantadas, marca bordes
 
 
 @dataclass
@@ -240,19 +246,41 @@ def _centerlines(geom: BaseGeometry, tip: float) -> list[np.ndarray]:
 
 # --- API -------------------------------------------------------------------
 
-def fill_geometry(geom: BaseGeometry, tip: float, overlap: float, fs: FillSettings) -> Result:
-    if geom.is_empty:
+MIN_DENSITY = 0.02
+
+
+def density_spacing(tip: float, overlap: float, density: float, pattern: str) -> tuple[float, bool]:
+    """Separación entre pasadas para cubrir `density` del área. (separación, es_parcial)"""
+    solid = tip * (1 - min(max(overlap, 0.0), 0.9))
+    d = min(max(density, 0.0), 1.0)
+    if d >= 0.999:
+        return solid, False
+    if pattern == "cross":
+        sd = tip / (1 - math.sqrt(1 - d))
+    else:
+        sd = tip / d
+    if sd <= solid * 1.001:
+        return solid, False
+    return sd, True
+
+
+def fill_geometry(geom: BaseGeometry, tip: float, overlap: float, fs: FillSettings,
+                  density: float = 1.0) -> Result:
+    if geom.is_empty or density < MIN_DENSITY:
         return Result([])
     tip = max(tip, 0.01)
     r = tip / 2
-    s = tip * (1 - min(max(overlap, 0.0), 0.9))
-    inner = geom.buffer(-r) if fs.compensate else geom
+    s, partial = density_spacing(tip, overlap, density, fs.pattern)
+    # En tonos parciales no se contrae la región: así dos tonos vecinos no
+    # dejan una franja blanca entre ellos (la tinta sobresale como máximo ½ punta).
+    compensate = fs.compensate and not partial
+    inner = geom.buffer(-r) if compensate else geom
     paths: list[np.ndarray] = []
     thin = 0
     lost = 0.0
 
     # partes que la punta no alcanza (más delgadas que el diámetro)
-    if fs.compensate and fs.thin != "skip":
+    if compensate and fs.thin != "skip":
         rest = geom.difference(inner.buffer(r * 1.02)) if not inner.is_empty else geom
         slivers = [p for p in _polys(rest)
                    if p.area > tip * tip * 0.35 and p.minimum_rotated_rectangle.length > 2.5 * tip]
@@ -260,7 +288,7 @@ def fill_geometry(geom: BaseGeometry, tip: float, overlap: float, fs: FillSettin
             thin = len(slivers)
             sg = shapely.union_all(slivers)
             paths += _centerlines(sg, tip) if fs.thin == "centerline" else _rings(sg)
-    elif fs.compensate:
+    elif compensate:
         lost = geom.area - inner.buffer(r).area
 
     if inner.is_empty:
@@ -271,7 +299,7 @@ def fill_geometry(geom: BaseGeometry, tip: float, overlap: float, fs: FillSettin
         return Result(paths, thin, lost)
 
     hatch_region = inner
-    if fs.outline or fs.pattern == "none":
+    if (fs.outline and (not partial or fs.outline_light)) or fs.pattern == "none":
         passes = max(1, int(fs.outline_passes))
         for k in range(passes):
             ring = inner if k == 0 else inner.buffer(-k * s)
@@ -281,16 +309,19 @@ def fill_geometry(geom: BaseGeometry, tip: float, overlap: float, fs: FillSettin
             hatch_region = ring
         hatch_region = hatch_region.buffer(-s * 0.5)
     if fs.pattern in ("lines", "zigzag", "cross") and not hatch_region.is_empty:
-        link = fs.pattern != "lines"
+        link = fs.pattern != "lines" and (not partial or fs.link_light)
         paths += _hatch(hatch_region, s, fs.angle, link, tip)
         if fs.pattern == "cross":
-            paths += _hatch(hatch_region, s, fs.angle + 90, True, tip)
+            paths += _hatch(hatch_region, s, fs.angle + 90, link, tip)
     return Result(paths, thin, lost)
 
 
-def item_paths(item: Item, tip: float, overlap: float, fs: FillSettings, ss: StrokeSettings) -> Result:
+def item_paths(item: Item, tip: float, overlap: float, fs: FillSettings, ss: StrokeSettings,
+               density: float = 1.0) -> Result:
+    if density < MIN_DENSITY:
+        return Result([])
     if item.kind == "fill":
-        return fill_geometry(region(item, fs.fill_rule), tip, overlap, fs)
+        return fill_geometry(region(item, fs.fill_rule), tip, overlap, fs, density)
 
     if ss.mode == "single" or item.width <= tip * (1 + ss.tolerance):
         out = []
@@ -310,5 +341,6 @@ def item_paths(item: Item, tip: float, overlap: float, fs: FillSettings, ss: Str
             pts = np.vstack([p, p[:1]]) if closed and not np.allclose(p[0], p[-1]) else p
             parts.append(LineString(pts).buffer(hw, cap_style="round", join_style="round"))
     geom = shapely.union_all(parts) if parts else Polygon()
-    sfs = FillSettings(pattern=ss.pattern, angle=45, outline=True, compensate=True, thin="centerline")
-    return fill_geometry(geom, tip, overlap, sfs)
+    sfs = FillSettings(pattern=ss.pattern, angle=fs.angle, outline=True, compensate=True, thin="centerline",
+                       outline_light=fs.outline_light, link_light=fs.link_light)
+    return fill_geometry(geom, tip, overlap, sfs, density)

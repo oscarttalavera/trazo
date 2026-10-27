@@ -7,6 +7,8 @@ Modos:
   hatch      Fotos/escala de grises: rayado por niveles de tono (cada nivel
              es una capa, se puede asignar a plumas distintas).
   edges      Bordes (Canny) -> trazos de un pase.
+  grays      Escala de grises por niveles: regiones rellenas, una capa por
+             tono; con densidad "auto" se dibujan todas con la misma pluma.
 """
 from __future__ import annotations
 
@@ -14,8 +16,9 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from .. import geometry as g
+from .. import tone
 
-MODES = ("trace", "centerline", "hatch", "edges")
+MODES = ("trace", "grays", "centerline", "hatch", "edges")
 
 
 def _load_gray_rgb(path: str, max_px: int):
@@ -49,7 +52,7 @@ def load(path: str, raster_mode: str = "trace", width_mm: float | None = None,
     if invert:
         dark = 1.0 - dark
 
-    doc = g.Document(source=path)
+    doc = g.Document(source=path, extent=(0.0, 0.0, W * mmpx, H * mmpx))
     to_mm = lambda pts: np.column_stack([pts[:, 0] * mmpx, (H - pts[:, 1]) * mmpx])  # noqa: E731
 
     if raster_mode == "trace":
@@ -62,6 +65,26 @@ def load(path: str, raster_mode: str = "trace", width_mm: float | None = None,
             paths = [g.close_path(to_mm(p)) for p in paths if len(p) >= 3]
             if paths:
                 doc.items.append(g.Item("fill", paths, [True] * len(paths), color, 0.0, name))
+    elif raster_mode == "grays":
+        from scipy.ndimage import median_filter
+        # cobertura de tinta que reproduce la luminancia de cada píxel
+        lin = np.where(gray <= 0.04045, gray / 12.92, ((gray + 0.055) / 1.055) ** 2.4)
+        cov = 1.0 - lin
+        if invert:
+            cov = 1.0 - cov
+        cov = np.clip(cov, 0, 1) ** (1.0 / max(gamma, 0.05))
+        n = max(1, int(levels))
+        q = median_filter(np.rint(cov * n).astype(np.int16), size=3)
+        for k in range(n, 0, -1):
+            mask = q == k
+            if mask.mean() < 0.0005:
+                continue
+            paths = _potrace(mask, turdsize, smooth, curve_tol / mmpx)
+            paths = [g.close_path(to_mm(p)) for p in paths if len(p) >= 3]
+            if paths:
+                d = k / n
+                doc.items.append(g.Item("fill", paths, [True] * len(paths), tone.gray_for_density(d), 0.0,
+                                        f"gris {round(d * 100)}%"))
     elif raster_mode == "centerline":
         from skimage.morphology import skeletonize
         mask = _bw_mask(dark, threshold)

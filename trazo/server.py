@@ -122,7 +122,24 @@ def plan(payload: dict = Body(...)):
     out, doc = _run(payload["file_id"], payload.get("settings", {}))
     res = job.summary(out)
     res["source_bounds"] = doc.bounds()
+    res["extent"] = doc.extent
     return res
+
+
+VIEWABLE = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
+
+
+@app.get("/api/source/{fid}")
+def source(fid: str):
+    """Archivo original, para superponerlo en la vista previa."""
+    info = FILES.get(fid)
+    if not info:
+        raise HTTPException(404, "Archivo no encontrado")
+    ext = Path(info["path"]).suffix.lower()
+    if ext not in VIEWABLE:
+        raise HTTPException(415, "Formato sin vista directa")
+    return FileResponse(info["path"], media_type=VIEWABLE[ext])
 
 
 def _download(files: list[gcode.GcodeFile], zip_name: str):

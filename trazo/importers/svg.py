@@ -123,6 +123,7 @@ def load(path: str, curve_tol: float = 0.05, text_font: str = "futural", **_) ->
     if height_px:
         flip = g.translate(0, height_px * PX_TO_MM)
         doc = doc.transformed(flip)
+        doc.extent = (0.0, 0.0, float(svg.width or 0) * PX_TO_MM, height_px * PX_TO_MM)
     return doc
 
 

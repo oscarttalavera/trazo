@@ -37,6 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--config", help="JSON con ajustes (mismo formato que la interfaz web)")
     g.add_argument("--map", action="append", default=[], metavar="CLAVE=PLUMA",
                    help="asigna un color/capa a una pluma; PLUMA vacía = omitir")
+    g.add_argument("--density", action="append", default=[], metavar="CLAVE=VALOR",
+                   help="densidad de un color/capa: auto o 0-100 (%%); ej. --density '#808080=40'")
+    g.add_argument("--tone-gamma", type=float, help="curva de tonos para densidad auto (>1 aclara)")
     g.add_argument("--group-by", choices=["color", "layer"])
     sc = g.add_mutually_exclusive_group()
     sc.add_argument("--fit", action="store_true", help="ajustar al área de dibujo")
@@ -56,12 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--per-pen", action="store_true", help="un archivo por pluma")
     g.add_argument("--preview", help="guardar vista previa SVG")
     r = g.add_argument_group("imágenes")
-    r.add_argument("--raster-mode", choices=["trace", "centerline", "hatch", "edges"])
+    r.add_argument("--raster-mode", choices=["trace", "grays", "centerline", "hatch", "edges"])
     r.add_argument("--image-width", type=float, help="ancho de la imagen en mm")
     r.add_argument("--threshold", type=float, help="umbral 0-1 (por defecto Otsu)")
     r.add_argument("--invert", action="store_true")
     r.add_argument("--colors", type=int, help="colores a separar en modo trace")
-    r.add_argument("--levels", type=int, help="niveles de tono en modo hatch")
+    r.add_argument("--levels", type=int, help="niveles de tono en modos grays y hatch")
     r.add_argument("--hatch-spacing", type=float)
 
     c = sub.add_parser("calibrate", help="patrón de calibración para una pluma")
@@ -95,6 +98,14 @@ def _config_from_args(a) -> dict:
         for m in a.map:
             key, _, pen = m.partition("=")
             pm[key] = pen
+    if a.density:
+        dm = d.setdefault("density_map", {})
+        for m in a.density:
+            key, _, val = m.partition("=")
+            val = val.strip().rstrip("%")
+            dm[key] = "auto" if val.lower() == "auto" else float(val) / 100.0
+    if a.tone_gamma:
+        d["density_gamma"] = a.tone_gamma
     if a.group_by:
         d["group_by"] = a.group_by
     L = d["layout"]
@@ -163,7 +174,8 @@ def cmd_gcode(a) -> int:
     out = job.run(doc, d, store, title=src.stem)
     for gr in out.plan.groups:
         pen = d.get("pen_map", {}).get(gr.key, d.get("default_pen") or "(por defecto)")
-        print(f"  grupo {gr.key}: {gr.items} elementos -> {pen or '(omitido)'}")
+        dens = f", densidad {gr.density * 100:.0f} %" if pen and gr.density < 0.999 else ""
+        print(f"  grupo {gr.key}: {gr.items} elementos -> {pen or '(omitido)'}{dens}")
     for w in out.plan.warnings:
         print(f"  aviso: {w}")
     st = out.stats

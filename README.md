@@ -94,7 +94,7 @@ Use el botón **Calibración** (o `trazo calibrate --pen "…"`). Dibuja:
 |---|---|
 | **SVG** | Trayectos, formas, transformaciones y viewBox en mm reales. Se distingue entre contorno (*stroke*, con su ancho) y relleno (*fill*). Las capas son las de Inkscape. El `<text>` se dibuja con fuente Hershey de un trazo. |
 | **DXF** | LINE, LWPOLYLINE/POLYLINE con arcos y ancho, ARC, CIRCLE, ELLIPSE, SPLINE, SOLID, HATCH (relleno), POINT, TEXT/MTEXT (Hershey) y bloques INSERT anidados. Respeta `$INSUNITS`; sin unidades, asume mm. Las capas apagadas o congeladas se omiten. |
-| **PNG/JPG** | **Logo/silueta:** vectoriza con potrace; con «colores a separar» genera una capa por color. **Dibujo de líneas:** extrae el eje central. **Foto/tonos:** rayado por niveles; cada tono es una capa gris para asignarle otra pluma. **Bordes:** detector Canny. |
+| **PNG/JPG** | **Logo/silueta:** vectoriza con potrace; con «colores a separar» genera una capa por color. **Escala de grises:** separa N niveles con densidad automática para una sola pluma. **Dibujo de líneas:** extrae el eje central. **Foto/tonos:** rayado por niveles en varias direcciones. **Bordes:** detector Canny. |
 
 **Texto:** las fuentes Hershey (*futural*, *scripts*, *timesr*…) se dibujan
 con **un solo trazo**, ideal para plotter. Si necesita la tipografía exacta,
@@ -115,6 +115,44 @@ se rellenará como cualquier figura.
   se dibuja con una sola pasada.
 - **Recorte:** nada se dibuja fuera del área de dibujo (material − margen ∩
   alcance de la pluma).
+
+### Escala de grises con una sola pluma (densidad)
+Cada color o capa tiene, además de su pluma, una **densidad**: la fracción del
+área que cubre la tinta.
+
+- **Separación de líneas:** se abre la separación entre líneas del relleno.
+  - Con líneas, zigzag o concéntrico: `punta ÷ densidad`.
+  - Con relleno cruzado: `punta ÷ (1 − √(1 − densidad))`.
+- **Opciones de densidad:**
+  - **Sólido 100 %**, o un porcentaje fijo (90 … 10 %).
+  - **Auto:** se calcula del tono del color usando la luminancia real, así
+    un gris de pantalla se ve igual en el papel.
+  - Por defecto, el **negro y los grises usan Auto** y los colores quedan sólidos.
+- **Sin cambios de pluma:** varios grupos con la **misma pluma** se dibujan
+  seguidos, sin pausas.
+- **Modo de imagen «Escala de grises»:** separa una foto en N niveles de
+  gris, cada uno como región rellena con su densidad: un retrato completo
+  con un solo fineliner.
+- **Curva de tonos:** aclara (valores > 1) u oscurece (< 1) todos los tonos
+  automáticos.
+- **Tonos parciales:**
+  - no se contraen ½ punta, para que dos tonos vecinos no dejen una franja
+    blanca entre ellos;
+  - por defecto no llevan contorno ni enlazan líneas, para que los bordes no
+    se marquen. Ambas cosas se pueden activar.
+- **Dónde aplica:** la densidad aplica a rellenos y a trazos gruesos. Una línea
+  de una sola pasada siempre sale al 100 %.
+
+### Consejos de la interfaz
+- **Mover el diseño:** arrástrelo en el lienzo; la caja azul muestra su medida
+  y posición.
+- **Navegar:** la rueda del ratón hace zoom y arrastrar fuera del diseño (o con
+  Shift) mueve la vista. `F` ajusta la vista.
+- **Original:** superpone el archivo de origen para comparar la vectorización.
+- **▶ o barra de espacio:** anima el recorrido (orden de dibujo y posición de
+  la pluma). La barra de recorrido permite revisar paso a paso.
+- **Coordenadas:** abajo a la derecha de la barra se ven las del cursor, tanto
+  de la pluma como de la boquilla. Sirven para ubicar la hoja en la cama.
 
 ## 5. Optimización
 - **Orden de los trazos:** vecino más cercano con KD-tree. Los lazos cerrados
@@ -151,6 +189,8 @@ trazo dibujo.svg -o dibujo.gcode --pen "Fineliner 0.5" --fit
 trazo plano.dxf --group-by layer --map CORTE="Sharpie fino" --map COTAS= --width 150
 trazo logo.png --colors 3 --image-width 80 --per-pen -o salida/
 trazo foto.jpg --raster-mode hatch --levels 4 --hatch-spacing 1.2 --preview prev.svg
+trazo retrato.jpg --raster-mode grays --levels 6 --pen "Fineliner 0.3"
+trazo plano.svg --density "#808080=40" --density "#ff0000=auto" --tone-gamma 1.2
 trazo calibrate --pen "Sharpie fino" --material "Cartón 2 mm"
 trazo profiles          # lista perfiles y dónde se guardan
 trazo serve             # interfaz web

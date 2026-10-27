@@ -47,6 +47,8 @@ class Document:
     items: list[Item] = field(default_factory=list)
     source: str = ""
     warnings: list[str] = field(default_factory=list)
+    # rectángulo del archivo original en coordenadas del documento (para superponerlo en la vista previa)
+    extent: tuple[float, float, float, float] | None = None
 
     def bounds(self) -> tuple[float, float, float, float] | None:
         pts = [p for it in self.items for p in it.paths if len(p)]
@@ -58,7 +60,8 @@ class Document:
 
     def transformed(self, m: np.ndarray) -> "Document":
         s = math.sqrt(abs(np.linalg.det(m[:2, :2])))
-        return Document([it.transformed(m, s) for it in self.items], self.source, list(self.warnings))
+        return Document([it.transformed(m, s) for it in self.items], self.source, list(self.warnings),
+                        self.extent)
 
 
 # --- Matrices afines 3x3 -----------------------------------------------------

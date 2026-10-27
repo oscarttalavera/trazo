@@ -10,6 +10,7 @@ from shapely.geometry import LineString
 from . import fill as F
 from . import geometry as g
 from . import optimize as opt
+from . import tone
 from .gcode import PenJob
 from .profiles import MachineProfile, MaterialProfile, PenProfile
 
@@ -36,6 +37,10 @@ class Settings:
     pen_map: dict = field(default_factory=dict)   # clave de grupo -> nombre de pluma ("" = omitir)
     default_pen: str | None = None
     group_order: list = field(default_factory=list)  # orden de dibujo de los grupos
+    # densidad por grupo: número 0-1 (o %), "auto" (según el tono) o ausente
+    # (automático solo para negro/grises; los colores van sólidos)
+    density_map: dict = field(default_factory=dict)
+    density_gamma: float = 1.0         # curva de tonos para "auto" (>1 aclara)
     simplify_tol: float = 0.02
     merge_tol: float | None = None     # None = medio diámetro de la punta
     min_len: float = 0.0
@@ -49,6 +54,8 @@ class Group:
     color: str
     items: int
     kinds: dict
+    density: float = 1.0               # densidad efectiva del grupo
+    tone: float = 1.0                  # densidad que daría "auto"
 
 
 @dataclass
@@ -59,6 +66,7 @@ class Plan:
     drawable: tuple[float, float, float, float]
     design_bounds: tuple[float, float, float, float] | None
     scale: float
+    matrix: list | None = None         # documento -> cama (3x3)
 
 
 def drawable_area(m: MachineProfile, mat: MaterialProfile) -> tuple[float, float, float, float]:
@@ -146,6 +154,9 @@ def plan(doc: g.Document, machine: MachineProfile, material: MaterialProfile,
         rank = {k: i for i, k in enumerate(settings.group_order)}
         grp.sort(key=lambda gr: rank.get(gr.key, len(rank)))
     default_pen = settings.default_pen or next(iter(pens), None)
+    for gr in grp:
+        gr.tone = tone.tone_density(gr.color, settings.density_gamma)
+        gr.density = tone.resolve(settings.density_map.get(gr.key), gr.color, settings.density_gamma)
 
     # agrupa por pluma, en el orden de los grupos
     by_pen: dict[str, list[g.Item]] = {}
@@ -168,7 +179,9 @@ def plan(doc: g.Document, machine: MachineProfile, material: MaterialProfile,
         pen = pens[pen_name]
         paths: list[np.ndarray] = []
         for it in items:
-            r = F.item_paths(it, pen.tip, pen.overlap, settings.fill, settings.stroke)
+            spec = settings.density_map.get(group_key(it, settings.group_by))
+            d = tone.resolve(spec, it.color, settings.density_gamma)
+            r = F.item_paths(it, pen.tip, pen.overlap, settings.fill, settings.stroke, d)
             paths += r.paths
             thin_total += r.thin_features
         if settings.clip:
@@ -192,4 +205,4 @@ def plan(doc: g.Document, machine: MachineProfile, material: MaterialProfile,
     if b and (b[0] < area[0] - 0.01 or b[1] < area[1] - 0.01 or b[2] > area[2] + 0.01 or b[3] > area[3] + 0.01):
         if not settings.clip:
             warnings.append("El diseño se sale del área de dibujo.")
-    return Plan(jobs, grp, warnings, area, b, s)
+    return Plan(jobs, grp, warnings, area, b, s, mtx.tolist())
