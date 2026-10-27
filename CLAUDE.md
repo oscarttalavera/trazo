@@ -76,12 +76,13 @@ en **español**; identificadores de código en inglés y comentarios en español
 
 ## Publicación
 - **CI** (`.github/workflows/web.yml`): en cada push corre las pruebas en
-  ambos motores y genera el artefacto `trazo-web.zip`. Con una etiqueta `v*`
-  crea un Release con `trazo-web-<versión>.zip`.
+  ambos motores y genera el artefacto `trazo-web.zip`. Al publicar un Release
+  (o subir una etiqueta `v*`) le adjunta `trazo-web-<versión>.zip`.
 - **Nueva versión:**
   1. subir `__version__` en `trazo/__init__.py` y en `pyproject.toml`;
   2. hacer push a `main`;
-  3. `git tag vX.Y.Z && git push origin vX.Y.Z`.
+  3. crear el Release `vX.Y.Z` en GitHub (o subir la etiqueta con git): el CI
+     le adjunta `trazo-web-vX.Y.Z.zip`.
 - La integración con tools.tritic3d.com está en
   `docs/integracion-tools-tritic3d.md`.
 

@@ -22,8 +22,9 @@ Contexto para continuar desde el proyecto de **tools.tritic3d.com** (GitHub Page
 - **No se ha probado aún en una impresora real.**
 
 ## Qué se publica
-Cada etiqueta `v*` del repo de Trazo crea un Release con
-**`trazo-web-<versión>.zip`** (~12 MB comprimido, ~20 MB descomprimido). El
+Cada Release del repo de Trazo (creado en GitHub → *Releases → Draft a new
+release*, o con una etiqueta `v*` subida con git) recibe automáticamente el
+archivo **`trazo-web-<versión>.zip`** (~12 MB comprimido, ~20 MB descomprimido). El
 contenido se sube **tal cual** a una carpeta. Todas las rutas son relativas.
 
 ```
@@ -120,7 +121,8 @@ la arquitectura, las reglas que no se deben romper y el backlog.
 **Publicar una versión nueva:**
 1. subir la versión en `trazo/__init__.py` y en `pyproject.toml`;
 2. hacer push a `main`;
-3. `git tag vX.Y.Z && git push origin vX.Y.Z`;
+3. crear el Release `vX.Y.Z` en GitHub (o `git tag vX.Y.Z && git push origin vX.Y.Z`);
+   el CI le adjunta el zip;
 4. en el repo de tools, cambiar `trazo.version` (opción A).
 
 Más adelante se puede automatizar: un `repository_dispatch` desde el

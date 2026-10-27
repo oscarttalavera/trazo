@@ -1,13 +1,15 @@
 name: web
 # Arma el sitio estático de Trazo (todo corre en el navegador con Pyodide).
 #  - cualquier push / PR / manual: pruebas (CPython y dentro de Pyodide) + artefacto trazo-web.zip
-#  - etiqueta v*: además publica un Release con trazo-web-<versión>.zip
+#  - etiqueta v* o Release publicado desde GitHub: adjunta trazo-web-<versión>.zip al Release
 #  - si la variable de repositorio DEPLOY_PAGES = "true": publica en GitHub Pages desde main
 on:
   push:
     branches: ["**"]
     tags: ["v*"]
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -62,8 +64,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp trazo-web.zip "trazo-web-${GITHUB_REF_NAME}.zip"
-          gh release create "$GITHUB_REF_NAME" "trazo-web-${GITHUB_REF_NAME}.zip" --title "Trazo $GITHUB_REF_NAME" \
+          # el Release puede existir ya (creado desde GitHub) o no (etiqueta subida con git)
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" \
+            --title "Trazo $GITHUB_REF_NAME" \
             --notes "Sitio web estático de Trazo. Descomprima el zip y súbalo tal cual a cualquier hosting (p. ej. tools.tritic3d.com/trazo/)."
+          gh release upload "$GITHUB_REF_NAME" "trazo-web-${GITHUB_REF_NAME}.zip" --clobber
 
   deploy-pages:
     needs: build
