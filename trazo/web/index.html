@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trazo · Plotter de pluma</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">✎</span> Trazo <small id="ver"></small></div>
+  <label class="btn" title="SVG, DXF, PNG o JPG">
+    <input type="file" id="file" accept=".svg,.dxf,.png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff" hidden>
+    Abrir archivo…
+  </label>
+  <span id="fname" class="fname">Ningún archivo</span>
+  <span class="grow"></span>
+  <span id="busy" class="busy" hidden>Calculando…</span>
+  <button class="btn" id="btnCal" title="Patrón para medir el ancho real de la pluma">Calibración</button>
+  <button class="btn primary" id="btnGen" disabled>Descargar G-code</button>
+</header>
+
+<main class="layout">
+  <aside class="side">
+    <details open>
+      <summary>Máquina y material</summary>
+      <div class="row"><label>Máquina</label><select data-k="machine" class="prof" data-kind="machines"></select><button class="ico" data-edit="machines" title="Editar perfiles">⚙</button></div>
+      <div class="row"><label>Material</label><select data-k="material" class="prof" data-kind="materials"></select><button class="ico" data-edit="materials" title="Editar perfiles">⚙</button></div>
+      <div class="row"><label>Pluma por defecto</label><select data-k="default_pen" class="prof" data-kind="pens"></select><button class="ico" data-edit="pens" title="Editar plumas">⚙</button></div>
+      <p class="hint" id="contactHint"></p>
+    </details>
+
+    <details open id="rasterBox" hidden>
+      <summary>Imagen</summary>
+      <div class="row"><label>Modo</label>
+        <select data-k="import.raster_mode">
+          <option value="trace">Logo / silueta (vectorizar)</option>
+          <option value="centerline">Dibujo de líneas (eje central)</option>
+          <option value="hatch">Foto / tonos (rayado)</option>
+          <option value="edges">Bordes</option>
+        </select></div>
+      <div class="row"><label>Ancho de la imagen (mm)</label><input type="number" step="1" min="1" data-k="import.width_mm" placeholder="auto (DPI)"></div>
+      <div class="row" data-show="trace centerline"><label>Umbral</label>
+        <input type="range" min="0.05" max="0.95" step="0.01" data-k="import.threshold" data-null-when="#thrAuto">
+        <label class="chk"><input type="checkbox" id="thrAuto" checked> auto</label></div>
+      <div class="row" data-show="trace"><label>Colores a separar</label><input type="number" min="1" max="8" data-k="import.colors"></div>
+      <div class="row" data-show="trace"><label>Ignorar manchas (px)</label><input type="number" min="0" max="200" data-k="import.turdsize"></div>
+      <div class="row" data-show="trace"><label>Suavizado</label><input type="range" min="0" max="1.33" step="0.01" data-k="import.smooth"></div>
+      <div class="row" data-show="hatch"><label>Niveles de tono</label><input type="number" min="1" max="6" data-k="import.levels"></div>
+      <div class="row" data-show="hatch"><label>Separación (mm)</label><input type="number" min="0.1" step="0.1" data-k="import.hatch_spacing"></div>
+      <div class="row" data-show="hatch"><label>Ángulo</label><input type="number" step="5" data-k="import.hatch_angle"></div>
+      <div class="row" data-show="hatch"><label>Contraste (gamma)</label><input type="range" min="0.3" max="3" step="0.05" data-k="import.gamma"></div>
+      <div class="row" data-show="edges"><label>Suavizado bordes</label><input type="range" min="0.5" max="6" step="0.1" data-k="import.edge_sigma"></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="import.invert"> Invertir claro/oscuro</label></div>
+    </details>
+
+    <details open>
+      <summary>Capas → plumas</summary>
+      <div class="row"><label>Agrupar por</label>
+        <select data-k="group_by"><option value="color">Color</option><option value="layer">Capa</option></select></div>
+      <table class="groups"><tbody id="groups"><tr><td class="muted">Abra un archivo…</td></tr></tbody></table>
+      <p class="hint">Las plumas se dibujan en el orden de la tabla. Con varias plumas, el G-code pausa para cambiarlas, o use «un archivo por pluma».</p>
+    </details>
+
+    <details open>
+      <summary>Escala y posición</summary>
+      <div class="row"><label>Escala</label>
+        <select data-k="layout.scale_mode">
+          <option value="real">Tamaño real</option><option value="fit">Ajustar al área</option>
+          <option value="width">Ancho (mm)</option><option value="height">Alto (mm)</option>
+          <option value="factor">Factor</option></select></div>
+      <div class="row" data-scale="width height"><label>Medida (mm)</label><input type="number" step="1" min="1" data-k="layout.target"></div>
+      <div class="row" data-scale="factor"><label>Factor</label><input type="number" step="0.05" min="0.01" data-k="layout.scale"></div>
+      <div class="row"><label>Rotación (°)</label><input type="number" step="90" data-k="layout.rotate"></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="layout.mirror_x"> Espejo horizontal</label>
+        <label class="chk"><input type="checkbox" data-k="layout.mirror_y"> Espejo vertical</label></div>
+      <div class="row"><label>Alinear</label>
+        <select data-k="layout.align">
+          <option value="center">Centro</option><option value="tl">Arriba izquierda</option><option value="tr">Arriba derecha</option>
+          <option value="bl">Abajo izquierda</option><option value="br">Abajo derecha</option><option value="origin">Coordenadas del archivo</option></select></div>
+      <div class="row"><label>Desplazar X / Y</label><input type="number" step="1" data-k="layout.offset_x"><input type="number" step="1" data-k="layout.offset_y"></div>
+    </details>
+
+    <details open>
+      <summary>Relleno y ancho de línea</summary>
+      <div class="row"><label>Patrón de relleno</label>
+        <select data-k="fill.pattern">
+          <option value="zigzag">Zigzag (menos levantadas)</option><option value="lines">Líneas paralelas</option>
+          <option value="cross">Cruzado</option><option value="concentric">Concéntrico</option><option value="none">Solo contorno</option></select></div>
+      <div class="row"><label>Ángulo</label><input type="number" step="15" data-k="fill.angle"></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="fill.outline"> Contorno</label>
+        <label>pasadas</label><input type="number" min="1" max="10" data-k="fill.outline_passes" class="short"></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="fill.compensate"> Compensar media punta</label></div>
+      <div class="row"><label>Detalles más finos que la punta</label>
+        <select data-k="fill.thin"><option value="centerline">Dibujar eje central</option><option value="outline">Dibujar contorno</option><option value="skip">Omitir</option></select></div>
+      <div class="row"><label>Regla de relleno</label>
+        <select data-k="fill.fill_rule"><option value="evenodd">Par-impar (huecos)</option><option value="nonzero">Unión</option></select></div>
+      <hr>
+      <div class="row"><label>Trazos gruesos</label>
+        <select data-k="stroke.mode"><option value="width">Respetar ancho del diseño</option><option value="single">Siempre una pasada</option></select></div>
+      <div class="row"><label>Pasadas de trazo grueso</label>
+        <select data-k="stroke.pattern"><option value="concentric">Paralelas (concéntrico)</option><option value="zigzag">Zigzag</option><option value="lines">Líneas</option></select></div>
+      <div class="row"><label>Tolerancia sobre la punta</label><input type="number" min="0" step="0.05" data-k="stroke.tolerance"></div>
+      <div class="row"><label>Fuente de texto</label><select data-k="import.text_font" id="fontSel"></select></div>
+    </details>
+
+    <details>
+      <summary>Optimización y salida</summary>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="reorder"> Reordenar trazos</label></div>
+      <div class="row"><label>Unir huecos menores a (mm)</label><input type="number" min="0" step="0.05" data-k="merge_tol" placeholder="½ punta"></div>
+      <div class="row"><label>Simplificar (mm)</label><input type="number" min="0" step="0.01" data-k="simplify_tol"></div>
+      <div class="row"><label>Precisión de curvas (mm)</label><input type="number" min="0.005" step="0.01" data-k="import.curve_tol"></div>
+      <div class="row"><label>Ignorar trazos menores a (mm)</label><input type="number" min="0" step="0.1" data-k="min_len"></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="clip"> Recortar al área de dibujo</label></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="per_pen"> Un archivo por pluma (.zip)</label></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="import.dxf_closed_as_fill"> DXF: rellenar figuras cerradas</label></div>
+      <div class="row"><label class="chk"><input type="checkbox" data-k="import.dxf_use_lineweight"> DXF: usar grosor de línea</label></div>
+    </details>
+    <p class="hint small" id="profPath"></p>
+  </aside>
+
+  <section class="view">
+    <div class="tools">
+      <button class="btn sm" id="fitView">Ajustar vista</button>
+      <label class="chk"><input type="checkbox" id="realWidth" checked> Ancho real</label>
+      <label class="chk"><input type="checkbox" id="showTravel" checked> Viajes</label>
+      <label class="chk prog">Recorrido <input type="range" id="progress" min="0" max="1000" value="1000"></label>
+    </div>
+    <canvas id="cv"></canvas>
+    <div class="drop" id="drop"><div><b>Arrastre aquí un archivo</b><br>SVG · DXF · PNG · JPG</div></div>
+    <div class="legend" id="legend"></div>
+  </section>
+</main>
+
+<footer class="stats">
+  <div id="stats" class="kv"></div>
+  <ul id="warnings" class="warn"></ul>
+</footer>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg">
+    <div class="dlg-head">
+      <b id="dlgTitle">Perfiles</b>
+      <select id="dlgSel"></select>
+      <button class="ico" value="cancel" title="Cerrar">✕</button>
+    </div>
+    <div id="dlgBody" class="dlg-body"></div>
+    <div class="dlg-foot">
+      <span id="dlgNote" class="muted"></span>
+      <span class="grow"></span>
+      <button class="btn" type="button" id="dlgDelete">Eliminar</button>
+      <button class="btn" type="button" id="dlgDup">Duplicar</button>
+      <button class="btn primary" type="button" id="dlgSave">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="calDlg">
+  <form method="dialog" class="dlg">
+    <div class="dlg-head"><b>Patrón de calibración</b><span class="grow"></span><button class="ico" value="cancel">✕</button></div>
+    <div class="dlg-body">
+      <p>Dibuja cuadros con traslape 0–40 %, líneas separadas 1×/1.5×/2× la punta, un círculo de 20 mm y una regla.</p>
+      <ol>
+        <li>Mida el ancho real de una línea (o vea en qué escalera las líneas empiezan a tocarse) y póngalo en <b>Ancho de línea</b> de la pluma.</li>
+        <li>Elija el traslape del cuadro que cubre parejo sin saturar.</li>
+        <li>Verifique la regla con un vernier: si no mide lo indicado, ajuste los pasos/mm del firmware.</li>
+      </ol>
+      <div class="row"><label>Pluma</label><select id="calPen"></select></div>
+    </div>
+    <div class="dlg-foot"><span class="grow"></span>
+      <button class="btn" type="button" id="calPreview">Ver</button>
+      <button class="btn primary" type="button" id="calDownload">Descargar</button></div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

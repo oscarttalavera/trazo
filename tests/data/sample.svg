@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="100mm" height="50mm" viewBox="0 0 200 100">
+  <g inkscape:groupmode="layer" inkscape:label="Contornos" id="layer1">
+    <rect x="10" y="10" width="60" height="40" fill="none" stroke="#ff0000" stroke-width="1"/>
+    <circle cx="120" cy="40" r="20" fill="#0000ff" stroke="none"/>
+    <path d="M 10 80 C 40 60, 70 100, 100 80" fill="none" stroke="black" stroke-width="6"/>
+  </g>
+  <g inkscape:groupmode="layer" inkscape:label="Texto" transform="translate(0,5)">
+    <text x="150" y="90" font-size="12" fill="green">Hola</text>
+    <path d="M150 10 h40 v30 h-40 z M160 20 h20 v10 h-20 z" fill="#000" fill-rule="evenodd"/>
+  </g>
+  <g style="display:none"><rect x="0" y="0" width="5" height="5" stroke="black"/></g>
+</svg>
