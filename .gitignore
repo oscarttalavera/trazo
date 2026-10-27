@@ -10,3 +10,4 @@ dist/
 *.zip
 .cache/
 site/
+*.egg-info/
