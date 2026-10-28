@@ -65,11 +65,16 @@ def open_path(name: str, path: str) -> str:
     return json.dumps({"file_id": fid, "name": name, "raster": FILES[fid]["raster"], "ext": ext})
 
 
-def _doc(fid: str, imp: dict):
+DRAFT_PX = 480  # lado mayor de las imágenes en el borrador (el final usa max_px, 1600 por defecto)
+
+
+def _doc(fid: str, imp: dict, draft: bool = False):
     if fid not in FILES:
         raise UserError("Archivo no encontrado; vuelva a abrirlo.")
     info = FILES[fid]
     opts = dict(imp or {})
+    if draft and info["raster"]:
+        opts["max_px"] = min(int(opts.get("max_px", 1600)), DRAFT_PX)
     if not info["raster"]:  # las opciones de imagen no afectan a los vectores
         opts = {k: opts[k] for k in ("curve_tol", "text_font", "dxf_closed_as_fill", "dxf_use_lineweight")
                 if k in opts}
@@ -89,20 +94,21 @@ def _doc(fid: str, imp: dict):
     return doc
 
 
-def _run(fid: str, settings_json: str, profiles_json: str):
+def _run(fid: str, settings_json: str, profiles_json: str, draft: bool = False):
     settings = json.loads(settings_json)
     imp = settings.pop("import", {})
-    doc = _doc(fid, imp)
+    doc = _doc(fid, imp, draft)
     title = gcode._slug(Path(FILES[fid]["name"]).stem)[:40] or "dibujo"
     try:
-        return job.run(doc, settings, _store(profiles_json), title=title), doc
+        return job.run(doc, settings, _store(profiles_json), title=title, draft=draft), doc
     except KeyError as e:
         raise UserError(str(e).strip("'\"")) from e
 
 
-def plan(fid: str, settings_json: str, profiles_json: str = "") -> str:
-    out, doc = _run(fid, settings_json, profiles_json)
+def plan(fid: str, settings_json: str, profiles_json: str = "", draft: bool = False) -> str:
+    out, doc = _run(fid, settings_json, profiles_json, bool(draft))
     res = job.summary(out)
+    res["draft"] = bool(draft)
     res["source_bounds"] = doc.bounds()
     res["extent"] = doc.extent
     return json.dumps(res)

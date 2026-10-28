@@ -274,6 +274,33 @@ def test_webapi_roundtrip(tmp_path):
     assert "Perfil" in missing["error"]
 
 
+def test_webapi_draft_plan(tmp_path):
+    """El borrador conserva geometría y tamaño, pero no genera G-code ni reordena."""
+    import json
+    import shutil
+    from trazo import webapi
+
+    def call(*args):
+        res = json.loads(webapi.call(*args))
+        assert "error" not in res, res.get("error")
+        return res["ok"]
+
+    for name in ("sample.svg", "foto.jpg"):
+        src = tmp_path / name
+        shutil.copy(DATA / name, src)
+        f = call("open_path", name, str(src))
+        cfg = json.dumps({"default_pen": "Fineliner 0.5", "layout": {"scale_mode": "fit"}})
+        full = call("plan", f["file_id"], cfg, "", False)
+        draft = call("plan", f["file_id"], cfg, "", True)
+        assert draft["draft"] is True and full["draft"] is False
+        assert draft["files"] == [] and full["files"]
+        assert draft["stats"]["draw_mm"] > 0 and draft["stats"]["seconds"] > 0
+        assert draft["jobs"] and draft["design_bounds"]
+        if name.endswith(".svg"):  # en imágenes la caja cambia un poco con la resolución
+            assert draft["design_bounds"] == pytest.approx(full["design_bounds"], abs=0.5)
+    assert webapi.DRAFT_PX < 1600
+
+
 # --- densidad / escala de grises ------------------------------------------
 
 def test_tone_roundtrip_and_rules():
