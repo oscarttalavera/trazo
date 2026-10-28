@@ -21,6 +21,8 @@ from .profiles import FIELD_INFO, KINDS, ProfileStore, from_dict, to_dict
 
 FILES: dict[str, dict] = {}
 DOC_CACHE: "OrderedDict[str, object]" = OrderedDict()
+CACHES = pipeline.Caches()                       # rellenos y trazos ordenados, reutilizables entre ajustes
+OUT_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()  # último resultado completo: «Generar G-code» no recalcula
 
 
 class UserError(Exception):
@@ -68,7 +70,7 @@ def open_path(name: str, path: str) -> str:
 DRAFT_PX = 480  # lado mayor de las imágenes en el borrador (el final usa max_px, 1600 por defecto)
 
 
-def _doc(fid: str, imp: dict, draft: bool = False):
+def _doc(fid: str, imp: dict, draft: bool = False) -> tuple[object, str]:
     if fid not in FILES:
         raise UserError("Archivo no encontrado; vuelva a abrirlo.")
     info = FILES[fid]
@@ -81,7 +83,7 @@ def _doc(fid: str, imp: dict, draft: bool = False):
     key = fid + json.dumps(opts, sort_keys=True)
     if key in DOC_CACHE:
         DOC_CACHE.move_to_end(key)
-        return DOC_CACHE[key]
+        return DOC_CACHE[key], key
     try:
         doc = importers.load(info["path"], **opts)
     except UserError:
@@ -91,18 +93,27 @@ def _doc(fid: str, imp: dict, draft: bool = False):
     DOC_CACHE[key] = doc
     while len(DOC_CACHE) > 6:
         DOC_CACHE.popitem(last=False)
-    return doc
+    return doc, key
 
 
 def _run(fid: str, settings_json: str, profiles_json: str, draft: bool = False):
     settings = json.loads(settings_json)
     imp = settings.pop("import", {})
-    doc = _doc(fid, imp, draft)
+    doc, doc_key = _doc(fid, imp, draft)
+    okey = (fid, settings_json, profiles_json, draft)
+    if okey in OUT_CACHE:
+        OUT_CACHE.move_to_end(okey)
+        return OUT_CACHE[okey]
     title = gcode._slug(Path(FILES[fid]["name"]).stem)[:40] or "dibujo"
     try:
-        return job.run(doc, settings, _store(profiles_json), title=title, draft=draft), doc
+        res = job.run(doc, settings, _store(profiles_json), title=title, draft=draft,
+                      cache=CACHES, doc_key=doc_key), doc
     except KeyError as e:
         raise UserError(str(e).strip("'\"")) from e
+    OUT_CACHE[okey] = res
+    while len(OUT_CACHE) > 2:
+        OUT_CACHE.popitem(last=False)
+    return res
 
 
 def plan(fid: str, settings_json: str, profiles_json: str = "", draft: bool = False) -> str:

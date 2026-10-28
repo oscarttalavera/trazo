@@ -80,7 +80,8 @@ def _draft_stats(pl: pipeline.Plan, machine, material) -> gcode.Stats:
     return st
 
 
-def run(doc: Document, d: dict, store: ProfileStore, title: str = "dibujo", draft: bool = False) -> Output:
+def run(doc: Document, d: dict, store: ProfileStore, title: str = "dibujo", draft: bool = False,
+        cache: pipeline.Caches | None = None, doc_key: str = "") -> Output:
     machine = store.get("machines", d.get("machine"))
     material = store.get("materials", d.get("material"))
     pens = {p.name: p for p in store.all("pens")}
@@ -88,7 +89,7 @@ def run(doc: Document, d: dict, store: ProfileStore, title: str = "dibujo", draf
     if draft:  # sin reordenar ni generar G-code: lo justo para ver el resultado
         s.reorder = False
         s.simplify_tol = max(s.simplify_tol, DRAFT_SIMPLIFY)
-    pl = pipeline.plan(doc, machine, material, pens, s)
+    pl = pipeline.plan(doc, machine, material, pens, s, cache, doc_key)
     if draft:
         return Output(pl, [], _draft_stats(pl, machine, material))
     files, stats = gcode.generate(pl.jobs, machine, material, title, per_pen=bool(d.get("per_pen")))
