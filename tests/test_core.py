@@ -274,6 +274,69 @@ def test_webapi_roundtrip(tmp_path):
     assert "Perfil" in missing["error"]
 
 
+def test_plan_cache_matches_and_is_reused():
+    """Con caché el resultado es idéntico, y mover/reordenar/cambiar un grupo no repite los rellenos."""
+    st = ProfileStore()
+    doc = importers.load(str(DATA / "sample.svg"))
+    cfg = {"default_pen": "Fineliner 0.5", "layout": {"scale_mode": "fit"}}
+
+    def run(cache, **extra):
+        d = {**cfg, **extra}
+        return job.run(doc, d, st, title="t", cache=cache, doc_key="k")
+
+    def flat(out):
+        return [p for j in out.plan.jobs for p in j.paths]
+
+    caches = pipeline.Caches()
+    plain = job.run(doc, cfg, st, title="t")
+    first = run(caches)
+    assert len(flat(first)) == len(flat(plain))
+    assert all(np.allclose(a, b) for a, b in zip(flat(first), flat(plain)))
+    n_fill = len(caches.fill)
+    assert n_fill > 0
+
+    again = run(caches)                       # mismo plan: todo sale de la caché
+    assert all(a is b for a, b in zip(flat(again), flat(first)))
+    assert again.files[0].text == first.files[0].text
+
+    moved = run(caches, layout={**cfg["layout"], "offset_x": 5.0, "offset_y": -3.0})
+    assert len(caches.fill) == n_fill         # mover no repite rellenos
+    ref = job.run(doc, {**cfg, "layout": {**cfg["layout"], "offset_x": 5.0, "offset_y": -3.0}}, st, title="t")
+    assert all(np.allclose(a, b) for a, b in zip(flat(moved), flat(ref)))
+    b0, b1 = first.plan.design_bounds, moved.plan.design_bounds
+    assert b1[0] - b0[0] == pytest.approx(5.0, abs=1e-6) and b1[1] - b0[1] == pytest.approx(-3.0, abs=1e-6)
+
+    run(caches, reorder=False, simplify_tol=0.1)
+    assert len(caches.fill) == n_fill         # ordenar/simplificar tampoco
+
+
+def test_webapi_draft_plan(tmp_path):
+    """El borrador conserva geometría y tamaño, pero no genera G-code ni reordena."""
+    import json
+    import shutil
+    from trazo import webapi
+
+    def call(*args):
+        res = json.loads(webapi.call(*args))
+        assert "error" not in res, res.get("error")
+        return res["ok"]
+
+    for name in ("sample.svg", "foto.jpg"):
+        src = tmp_path / name
+        shutil.copy(DATA / name, src)
+        f = call("open_path", name, str(src))
+        cfg = json.dumps({"default_pen": "Fineliner 0.5", "layout": {"scale_mode": "fit"}})
+        full = call("plan", f["file_id"], cfg, "", False)
+        draft = call("plan", f["file_id"], cfg, "", True)
+        assert draft["draft"] is True and full["draft"] is False
+        assert draft["files"] == [] and full["files"]
+        assert draft["stats"]["draw_mm"] > 0 and draft["stats"]["seconds"] > 0
+        assert draft["jobs"] and draft["design_bounds"]
+        if name.endswith(".svg"):  # en imágenes la caja cambia un poco con la resolución
+            assert draft["design_bounds"] == pytest.approx(full["design_bounds"], abs=0.5)
+    assert webapi.DRAFT_PX < 1600
+
+
 # --- densidad / escala de grises ------------------------------------------
 
 def test_tone_roundtrip_and_rules():

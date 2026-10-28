@@ -180,6 +180,16 @@
   <section class="view" id="view">
     <canvas id="cv"></canvas>
     <div class="loadbar" id="loadbar" hidden></div>
+    <div class="tb tb-calc" id="calcBar" role="group" aria-label="Cálculo de la vista previa">
+      <div class="seg" id="calcMode" title="Automático: recalcula al terminar de ajustar. Manual: recalcula solo al pulsar Aplicar.">
+        <button data-v="auto">Auto</button><button data-v="manual">Manual</button>
+      </div>
+      <div class="seg" title="Muestra una vista rápida y aproximada mientras ajusta valores o mueve la imagen">
+        <button id="tDraft">Borrador</button>
+      </div>
+      <span class="calc-chip" id="calcChip" role="status" hidden></span>
+      <button class="btn sm primary" id="btnApply" hidden title="Calcular el resultado final (Ctrl+Intro)">Aplicar</button>
+    </div>
     <div class="tb tb-top">
       <button class="ib" id="fitView" title="Ajustar vista (F)"><i data-icon="fit"></i></button>
       <button class="ib" id="zoomOut" title="Alejar (−)"><i data-icon="zoomout"></i></button>

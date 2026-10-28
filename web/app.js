@@ -5,7 +5,9 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 const S = {
   meta: null, file: null, settings: null, plan: null, calibration: false,
-  view: null, req: 0, timer: null, drag: null, hover: false, orig: null, anim: null, cursor: null,
+  view: null, timer: null, fullTimer: null, drag: null, hover: false, orig: null, anim: null, cursor: null,
+  // planificador: ver sube con cada cambio de ajustes; shownVer es la versión que muestra el lienzo
+  ver: 0, shownVer: -1, shownDraft: false, wantDraft: false, wantFull: false, pumpP: null, running: null,
 };
 const STORE_KEY = "trazo.settings.v1";
 const UI_KEY = "trazo.ui.v2";
@@ -41,7 +43,7 @@ function css(name) { return getComputedStyle(document.documentElement).getProper
 function loadJSON(key) { try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_) { return null; } }
 function saveJSON(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (_) { /* sin almacenamiento */ } }
 function saveLocal() { saveJSON(STORE_KEY, S.settings); }
-const UI = Object.assign({ closed: {}, insp: true, width: true, travel: false, orig: false }, loadJSON(UI_KEY) || {});
+const UI = Object.assign({ closed: {}, insp: true, width: true, travel: false, orig: false, mode: "auto", draft: true }, loadJSON(UI_KEY) || {});
 const saveUI = () => saveJSON(UI_KEY, UI);
 function merge(base, extra) {
   if (!extra || typeof extra !== "object") return base;
@@ -99,7 +101,7 @@ function engineStatus(text, pct) {
   $("#engineBar").style.width = `${pct}%`;
   $("#engineText").textContent = ready ? "Motor listo." : `${text} ${Math.round(pct)} %`;
   $("#engine").classList.toggle("done", ready);
-  if (!S.timer && !S.req) $("#state").textContent = ready ? "Listo" : "Cargando motor…";
+  if (!S.running && !S.pumpP) $("#state").textContent = ready ? "Listo" : "Cargando motor…";
 }
 function engineFatal(text) {
   $("#engine").classList.add("fail");
@@ -170,7 +172,7 @@ async function init() {
   for (const [k, kind] of [["machine", "machines"], ["material", "materials"], ["default_pen", "pens"]]) {
     if (!S.meta.profiles[kind].some((p) => p.name === S.settings[k])) S.settings[k] = S.meta.profiles[kind][0].name;
   }
-  bindControls(); setupSections(); setupCanvas(); setupFile(); setupDialogs(); setupGroupsBulk(); setupKeys();
+  bindControls(); setupSections(); setupCanvas(); setupFile(); setupDialogs(); setupGroupsBulk(); setupKeys(); setupCalc();
   $("#tWidth").classList.toggle("on", UI.width);
   $("#tTravel").classList.toggle("on", UI.travel);
   $("#tOrig").classList.toggle("on", UI.orig);
@@ -212,12 +214,14 @@ function writeAll() {
   }
   for (const b of $$("[data-tog]")) b.classList.toggle("on", !!getK(S.settings, b.dataset.tog));
 }
-function changed() { writeAll(); refreshUI(); schedule(); }
+function changed(live = false) { writeAll(); refreshUI(); schedule(live); }
 function bindControls() {
   writeAll();
   for (const el of $$("[data-k]")) {
-    el.addEventListener(el.type === "range" ? "input" : "change", () => {
-      setK(S.settings, el.dataset.k, readControl(el)); changed();
+    // los deslizadores disparan «input» sin parar mientras se arrastran: cambio «en vivo»
+    const live = el.type === "range";
+    el.addEventListener(live ? "input" : "change", () => {
+      setK(S.settings, el.dataset.k, readControl(el)); changed(live);
     });
   }
   for (const seg of $$("[data-seg]")) {
@@ -281,25 +285,97 @@ function renderSummaries() {
   set("relleno", `${PATTERN_NAME[st.fill.pattern]} ${st.fill.angle}°`);
   set("salida", st.per_pen ? "uno por pluma" : "un archivo");
 }
-function schedule() { clearTimeout(S.timer); S.timer = setTimeout(replan, 250); }
 
-// ---------- plan ----------
-async function replan() {
-  if (!S.file) { if (S.calibration) calPreview(); return; }
+// ---------- plan: borrador rápido + resultado final ----------
+// Cada cambio de ajustes sube S.ver. El motor calcula de uno en uno (Python no se puede
+// interrumpir), así que solo se encola lo último: si hay varios cambios seguidos se
+// salta lo intermedio.
+//   · Borrador: imagen reducida, sin reordenar trazos ni generar G-code; casi inmediato.
+//   · Final: lo que se descarga. En modo automático se calcula al dejar de ajustar;
+//     en modo manual, al pulsar «Aplicar».
+function schedule(live = false) {
+  S.ver++;
+  S.wantDraft = S.wantFull = false;
+  clearTimeout(S.timer); clearTimeout(S.fullTimer);
+  if (!S.file) {
+    if (S.calibration) S.timer = setTimeout(calPreview, 250);
+    return;
+  }
+  if (UI.draft) S.timer = setTimeout(() => { S.wantDraft = true; pump(); }, live ? 80 : 0);
+  if (UI.mode === "auto") S.fullTimer = setTimeout(() => { S.wantFull = true; pump(); }, live ? 700 : 250);
+  updateCalcUI();
+}
+function applyNow() {
+  if (!S.file) return;
+  clearTimeout(S.fullTimer);
+  S.wantFull = true;
+  return pump();
+}
+function pump() {
+  if (!S.pumpP) {
+    S.pumpP = (async () => {
+      try { while (await planStep()) { /* sigue mientras haya trabajo pendiente */ } }
+      finally { S.pumpP = null; busy(false); updateCalcUI(); }
+    })();
+  }
+  return S.pumpP;
+}
+async function planStep() {
+  const stale = S.shownVer < S.ver;
+  let draft;
+  if (S.wantDraft && stale) draft = true;
+  else if (S.wantFull && (stale || S.shownDraft)) draft = false;
+  else { S.wantDraft = S.wantFull = false; return false; }
+  if (draft) S.wantDraft = false; else S.wantFull = false;
+  if (!S.file) return false;
   S.calibration = false;
-  const id = ++S.req;
-  busy(true);
+  const ver = S.ver, fid = S.file.file_id;
+  S.running = draft ? "draft" : "full";
+  busy(true, draft ? "Borrador…" : "Calculando…");
+  updateCalcUI();
   try {
-    const res = await rpc("plan", [S.file.file_id, JSON.stringify(S.settings), profilesJSON()]);
-    if (id !== S.req) return;
+    const res = await rpc("plan", [fid, JSON.stringify(S.settings), profilesJSON(), draft]);
+    if (!S.file || S.file.file_id !== fid) return true;
     const first = !S.plan;
-    S.plan = res;
+    S.plan = res; S.shownVer = ver; S.shownDraft = draft;
     renderGroups(); renderInspector(); renderFile(); refreshUI();
     if (first) fitView();
     draw();
-  } catch (e) {
-    if (id === S.req) toast(e.message);
-  } finally { if (id === S.req) busy(false); }
+  } catch (e) { toast(e.message); } finally { S.running = null; }
+  return true;
+}
+function updateCalcUI() {
+  for (const b of $$("#calcMode button")) b.classList.toggle("on", b.dataset.v === UI.mode);
+  $("#tDraft").classList.toggle("on", UI.draft);
+  const manual = UI.mode === "manual";
+  const stale = !!S.file && S.shownVer < S.ver;
+  const draftShown = !!S.file && S.shownDraft && !stale;
+  let chip = "", warn = false;
+  if (S.running === "draft") chip = "Borrador…";
+  else if (S.running === "full") chip = "Calculando…";
+  else if (stale) { chip = manual ? "Cambios sin aplicar" : "Pendiente"; warn = manual; }
+  else if (draftShown) { chip = "Borrador"; warn = true; }
+  const c = $("#calcChip");
+  c.textContent = chip; c.hidden = !chip; c.classList.toggle("warn", warn);
+  $("#btnApply").hidden = !(manual && S.file && (stale || S.shownDraft) && !S.running);
+  $("#cv").classList.toggle("dim", manual && stale && !S.running && !UI.draft);
+  $("#btnGen").title = manual && (stale || S.shownDraft)
+    ? "Generar el G-code con los ajustes actuales (Ctrl+G); la vista aún no los refleja"
+    : "Generar y descargar el G-code (Ctrl+G)";
+}
+function setupCalc() {
+  for (const b of $$("#calcMode button")) {
+    b.addEventListener("click", () => {
+      UI.mode = b.dataset.v; saveUI();
+      if (UI.mode === "auto" && S.file && (S.shownVer < S.ver || S.shownDraft)) {
+        S.wantFull = true; clearTimeout(S.fullTimer); S.fullTimer = setTimeout(pump, 250);
+      }
+      updateCalcUI();
+    });
+  }
+  $("#tDraft").addEventListener("click", () => { UI.draft = !UI.draft; saveUI(); updateCalcUI(); });
+  $("#btnApply").addEventListener("click", applyNow);
+  updateCalcUI();
 }
 
 // ---------- 01 archivo ----------
@@ -410,13 +486,14 @@ function renderInspector() {
   const changes = S.settings.per_pen ? 0 : Math.max(0, p.jobs.length - 1);
   const b = p.design_bounds;
   const lines = p.files ? p.files.reduce((a, f) => a + f.lines, 0) : 0;
-  $("#cajetin").innerHTML = cell("Tiempo estimado", st.time, true)
-    + cell("Dibujo", fmtM(st.draw_mm)) + cell("Viajes", fmtM(st.travel_mm))
-    + cell("Levantadas", st.lifts) + cell("Cambios de pluma", S.settings.per_pen ? `${p.files.length} archivos` : changes)
+  const dr = !!p.draft;
+  $("#cajetin").innerHTML = cell("Tiempo estimado", dr ? "~" + st.time + " · borrador" : st.time, true)
+    + cell("Dibujo", fmtM(st.draw_mm)) + cell("Viajes", dr ? "—" : fmtM(st.travel_mm))
+    + cell("Levantadas", dr ? "—" : st.lifts) + cell("Cambios de pluma", S.settings.per_pen ? `${dr ? p.jobs.length : p.files.length} archivos` : changes)
     + cell("Tamaño (mm)", b ? `${fmt(b[2] - b[0])} × ${fmt(b[3] - b[1])}` : "—")
     + cell("Escala", p.scale ? `${(p.scale * 100).toFixed(1)} %` : "—")
     + cell("Líneas G-code", lines ? lines.toLocaleString("es-MX") : "—")
-    + cell("Archivo(s)", p.files ? p.files.length : "—");
+    + cell("Archivo(s)", p.files && !dr ? p.files.length : "—");
   $("#seq").innerHTML = p.jobs.length ? p.jobs.map((j, i) => {
     const e = st.per_pen[i];
     const w = Math.max(1, Math.min(6, j.tip * 3));
@@ -428,6 +505,7 @@ function renderInspector() {
   const w = p.warnings || [];
   $("#warnings").innerHTML = w.length
     ? w.map((x) => `<div class="callout warn" data-tab="PRECAUCIÓN">${esc(x)}</div>`).join("")
+    : p.draft ? '<div class="callout warn" data-tab="BORRADOR">Vista aproximada: el resultado final se calcula al terminar de ajustar.</div>'
     : `<div class="callout ok" data-tab="LISTO">${S.calibration ? "Patrón de calibración listo para descargar." : "Sin avisos. El G-code está listo para generarse."}</div>`;
 }
 
@@ -444,7 +522,10 @@ async function openFile(f) {
     S.settings.layout.offset_x = 0; S.settings.layout.offset_y = 0; writeAll();
     $("#empty").hidden = true;
     refreshUI(); renderFile();
-    await replan();
+    S.ver++; S.shownVer = -1; S.shownDraft = false;
+    clearTimeout(S.timer); clearTimeout(S.fullTimer);
+    S.wantFull = true; S.wantDraft = UI.draft && !!S.file.raster;  // las imágenes grandes enseñan primero el borrador
+    await pump();
   } catch (e) { toast(e.message); } finally { busy(false); }
 }
 function openDialog() { $("#file").value = ""; $("#file").click(); }
@@ -474,6 +555,7 @@ function setupFile() {
 function setupKeys() {
   document.addEventListener("keydown", (e) => {
     const typing = e.target.closest("input, select, textarea");
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); applyNow(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") { e.preventDefault(); openDialog(); return; }
     if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "g" || e.key.toLowerCase() === "s")) { e.preventDefault(); generate(); return; }
     if (typing || $("dialog[open]")) return;
@@ -558,8 +640,11 @@ function setupCanvas() {
       const L = S.settings.layout;
       L.offset_x = +((L.offset_x || 0) + d.dx).toFixed(1);
       L.offset_y = +((L.offset_y || 0) + d.dy).toFixed(1);
+      const synced = S.shownVer === S.ver && !S.shownDraft;
       shiftPlan(d.dx, d.dy);
       changed();
+      // mover la pieza solo la traslada: la vista sigue al día aunque el modo sea manual
+      if (synced && UI.mode === "manual") { S.shownVer = S.ver; clearTimeout(S.timer); S.wantDraft = false; updateCalcUI(); }
     }
     draw();
   });
@@ -690,7 +775,7 @@ function draw() {
         for (let q = 2; q < p.length; q += 2) g.lineTo(DX(p[q]), DY(p[q + 1]));
       }
       g.stroke();
-      if (UI.travel) {
+      if (UI.travel && !S.plan.draft) {
         g.beginPath(); g.strokeStyle = col.viaje; g.lineWidth = 1; g.setLineDash([3, 3]);
         for (let i = 0; i < n; i++) {
           const p = j.paths[i];

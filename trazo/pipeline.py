@@ -1,7 +1,7 @@
 """Del documento importado a trabajos por pluma listos para G-code."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import astuple, dataclass, field
 
 import numpy as np
 import shapely
@@ -11,6 +11,8 @@ from . import fill as F
 from . import geometry as g
 from . import optimize as opt
 from . import tone
+from .cache import LRU
+from .cache import points as cache_points
 from .gcode import PenJob
 from .profiles import MachineProfile, MaterialProfile, PenProfile
 
@@ -141,14 +143,32 @@ def _clip(paths: list[np.ndarray], rect) -> tuple[list[np.ndarray], int]:
     return out, clipped
 
 
+@dataclass
+class Caches:
+    """Resultados reutilizables entre dos planes seguidos (solo en la interfaz web)."""
+    fill: LRU = field(default_factory=lambda: LRU(2_500_000))   # relleno de cada elemento
+    jobs: LRU = field(default_factory=lambda: LRU(2_500_000))   # trazos ya recortados y ordenados de cada pluma
+
+
 def plan(doc: g.Document, machine: MachineProfile, material: MaterialProfile,
-         pens: dict[str, PenProfile], settings: Settings) -> Plan:
+         pens: dict[str, PenProfile], settings: Settings,
+         cache: Caches | None = None, doc_key: str = "") -> Plan:
+    """Con `cache` y `doc_key` (identifica el documento importado) solo se recalcula lo que cambió:
+    mover la pieza, cambiar la pluma de un grupo, el orden, el recorte, etc. no repiten los rellenos."""
     warnings = list(doc.warnings)
     area = drawable_area(machine, material)
     if area[2] - area[0] <= 0 or area[3] - area[1] <= 0:
         warnings.append("El área de dibujo es nula: revise offset de pluma, posición y margen del material.")
     mtx, s = layout_matrix(doc, settings.layout, area)
-    placed = doc.transformed(mtx)
+    # el desplazamiento manual solo traslada: se rellena sin él y se suma al final,
+    # así mover la pieza reutiliza los rellenos
+    ox, oy = float(settings.layout.offset_x or 0.0), float(settings.layout.offset_y or 0.0)
+    base = mtx.copy()
+    base[0, 2] -= ox
+    base[1, 2] -= oy
+    placed = doc.transformed(base)
+    bkey = tuple(np.round(base, 9).ravel().tolist())
+    fs_t, ss_t = astuple(settings.fill), astuple(settings.stroke)
     grp = groups(doc, settings.group_by)
     if settings.group_order:
         rank = {k: i for i, k in enumerate(settings.group_order)}
@@ -167,32 +187,53 @@ def plan(doc: g.Document, machine: MachineProfile, material: MaterialProfile,
             continue
         by_pen.setdefault(pen_name, [])
         labels.setdefault(pen_name, []).append(gr.key)
-    for it in placed.items:
+    for i, it in enumerate(placed.items):
         pen_name = settings.pen_map.get(group_key(it, settings.group_by), default_pen)
         if pen_name in by_pen:
-            by_pen[pen_name].append(it)
+            by_pen[pen_name].append((i, it))
 
     jobs: list[PenJob] = []
     thin_total = clipped_total = 0
     start = np.array([machine.park_x + machine.pen_offset_x, machine.park_y + machine.pen_offset_y])
-    for pen_name, items in by_pen.items():
+    for pen_name, entries in by_pen.items():
         pen = pens[pen_name]
-        paths: list[np.ndarray] = []
-        for it in items:
-            spec = settings.density_map.get(group_key(it, settings.group_by))
-            d = tone.resolve(spec, it.color, settings.density_gamma)
-            r = F.item_paths(it, pen.tip, pen.overlap, settings.fill, settings.stroke, d)
-            paths += r.paths
-            thin_total += r.thin_features
-        if settings.clip:
-            paths, c = _clip(paths, area)
-            clipped_total += c
-        paths = opt.prepare(paths, settings.simplify_tol, settings.min_len)
         merge = settings.merge_tol if settings.merge_tol is not None else pen.tip * 0.5
-        if settings.reorder:
-            paths = opt.order(paths, start, merge)
-        else:
-            paths = opt.join_close(paths, merge)
+        dens = [tone.resolve(settings.density_map.get(group_key(it, settings.group_by)), it.color,
+                             settings.density_gamma) for _, it in entries]
+        keys = None
+        hit = jkey = None
+        if cache is not None and doc_key:
+            keys = [(doc_key, i, bkey, pen.tip, pen.overlap, fs_t, ss_t, round(d, 4))
+                    for (i, _), d in zip(entries, dens)]
+            jkey = (tuple(keys), round(ox, 6), round(oy, 6), tuple(round(v, 6) for v in area), settings.clip,
+                    settings.simplify_tol, settings.min_len, merge, settings.reorder,
+                    tuple(np.round(start, 4).tolist()))
+            hit = cache.jobs.get(jkey)
+        if hit is None:
+            paths: list[np.ndarray] = []
+            thin = 0
+            for n, ((_, it), d) in enumerate(zip(entries, dens)):
+                r = cache.fill.get(keys[n]) if keys else None
+                if r is None:
+                    r = F.item_paths(it, pen.tip, pen.overlap, settings.fill, settings.stroke, d)
+                    if keys:
+                        cache.fill.put(keys[n], r, cache_points(r.paths))
+                paths += [q + (ox, oy) for q in r.paths] if (ox or oy) else r.paths
+                thin += r.thin_features
+            clipped = 0
+            if settings.clip:
+                paths, clipped = _clip(paths, area)
+            paths = opt.prepare(paths, settings.simplify_tol, settings.min_len)
+            if settings.reorder:
+                paths = opt.order(paths, start, merge)
+            else:
+                paths = opt.join_close(paths, merge)
+            hit = (paths, thin, clipped)
+            if jkey is not None:
+                cache.jobs.put(jkey, hit, cache_points(paths))
+        paths, thin, clipped = hit
+        thin_total += thin
+        clipped_total += clipped
         if paths:
             start = paths[-1][-1]
             jobs.append(PenJob(pen, paths, ", ".join(labels[pen_name])))
@@ -201,7 +242,8 @@ def plan(doc: g.Document, machine: MachineProfile, material: MaterialProfile,
         warnings.append(f"{thin_total} detalle(s) más delgados que la punta se dibujaron por su eje central.")
     if clipped_total:
         warnings.append(f"{clipped_total} trazo(s) recortados por salirse del área de dibujo.")
-    b = placed.bounds()
+    bb = placed.bounds()
+    b = (bb[0] + ox, bb[1] + oy, bb[2] + ox, bb[3] + oy) if bb else None
     if b and (b[0] < area[0] - 0.01 or b[1] < area[1] - 0.01 or b[2] > area[2] + 0.01 or b[3] > area[3] + 0.01):
         if not settings.clip:
             warnings.append("El diseño se sale del área de dibujo.")

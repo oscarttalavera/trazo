@@ -6,6 +6,7 @@ from pathlib import Path
 
 from . import fill as F
 from . import gcode, importers, pipeline, preview
+from . import optimize as opt
 from .geometry import Document
 from .profiles import ProfileStore
 
@@ -59,12 +60,38 @@ def import_file(path: str | Path, options: dict | None = None) -> Document:
     return importers.load(str(path), **(options or {}))
 
 
-def run(doc: Document, d: dict, store: ProfileStore, title: str = "dibujo") -> Output:
+DRAFT_SIMPLIFY = 0.1  # mm: trazos más toscos y ligeros en el borrador
+
+
+def _draft_stats(pl: pipeline.Plan, machine, material) -> gcode.Stats:
+    """Estimación rápida (sin generar el texto del G-code) para la vista borrador."""
+    st = gcode.Stats()
+    pos = (machine.park_x + machine.pen_offset_x, machine.park_y + machine.pen_offset_y)
+    for j in pl.jobs:
+        draw, travel, lifts = opt.travel_stats(j.paths, pos)
+        sec = draw / (j.pen.draw_feed * material.speed_factor) * 60 + travel / machine.travel_feed * 60
+        st.draw_mm += draw
+        st.travel_mm += travel
+        st.lifts += lifts
+        st.seconds += sec
+        st.per_pen.append({"pen": j.pen.name, "seconds": sec})
+        if j.paths:
+            pos = tuple(j.paths[-1][-1])
+    return st
+
+
+def run(doc: Document, d: dict, store: ProfileStore, title: str = "dibujo", draft: bool = False,
+        cache: pipeline.Caches | None = None, doc_key: str = "") -> Output:
     machine = store.get("machines", d.get("machine"))
     material = store.get("materials", d.get("material"))
     pens = {p.name: p for p in store.all("pens")}
     s = settings_from_dict(d)
-    pl = pipeline.plan(doc, machine, material, pens, s)
+    if draft:  # sin reordenar ni generar G-code: lo justo para ver el resultado
+        s.reorder = False
+        s.simplify_tol = max(s.simplify_tol, DRAFT_SIMPLIFY)
+    pl = pipeline.plan(doc, machine, material, pens, s, cache, doc_key)
+    if draft:
+        return Output(pl, [], _draft_stats(pl, machine, material))
     files, stats = gcode.generate(pl.jobs, machine, material, title, per_pen=bool(d.get("per_pen")))
     if stats.out_of_bounds:
         pl.warnings.append(f"{stats.out_of_bounds} punto(s) fuera del recorrido de la máquina "
